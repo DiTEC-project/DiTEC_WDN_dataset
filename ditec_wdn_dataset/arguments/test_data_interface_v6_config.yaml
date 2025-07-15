@@ -7,10 +7,14 @@ node_attrs:
   - reservoir_base_head
   - junction_elevation
   - tank_elevation
-edge_attrs: []
-label_attrs: []
-edge_label_attrs: []
-num_records: 10_000 #this number will be divided into 60%train-20%val-20%test
+edge_attrs:
+- pipe_length
+- pipe_diameter
+label_attrs: 
+- demand
+edge_label_attrs: [] #keep it empty if unused
+num_records: 100 #this number will be divided into 60%train-20%val-20%test
+batch_axis_choice: scene # unit of records
 selected_snapshots: null
 verbose: false # turn on for more debug info
 split_type: scene # two way to split data - scenario or temporal axis
@@ -21,7 +25,6 @@ unstackable_pad_value: -1.0
 bypass_skip_names_in_config: false
 do_lazy: false
 overwatch: false
-batch_axis_choice: snapshot
 do_cache: false # set True if your RAM can handle the whole array.
 subset_shuffle: true  # if True, we shuffle the subset and STORE the shuffle ids. Otherwise, we do sampling with a dedicated step size w.r.t. num_records.              
 split_per_network: true # Assume we choose num_records 10_000, so #samples of training subset is 6_000. If you have 2 networks, we will sample 3_000 per each.
