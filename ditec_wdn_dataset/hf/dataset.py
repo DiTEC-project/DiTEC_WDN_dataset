@@ -12,21 +12,18 @@ import os
 from typing import Any, Literal, Optional, Sequence, Union
 import numpy as np
 import torch
+from wntr.network import WaterNetworkModel
 from ditec_wdn_dataset.utils.auxil_v8 import (
-    get_adj_list,
     get_object_name_list_by_component,
     is_node_simulation_output,
-    get_curve_parameters,
     shuffle_list,
     masking_list,
     get_all_simulation_output_parameters,
-    is_node,
 )
 import tempfile
 from torch_geometric.data.data import BaseData
 from torch_geometric.data import Dataset, Data, Batch
 
-from wntr.network import WaterNetworkModel
 from torch import Tensor, from_numpy, save, load
 
 import dask.array.core as dac
@@ -167,30 +164,6 @@ class GidaV7(Dataset):
                 ele_com = f"{ele}_{com}"
                 datafiles[ele_com] = f"{wdn_folder}/{ele_com}-*.parquet"
             return datafiles, attrs
-
-        # def download_from_hf(self):
-        #     uni_list = set(self.sorted_node_attrs).union(self.sorted_edge_attrs).union(self.sorted_label_attrs).union(self.sorted_edge_label_attrs)
-        #     downloaded_attrs = []
-
-        #     com_attr_dict = defaultdict(list)
-
-        #     for attr in uni_list:
-        #         if isinstance(attr, str):
-        #             com = self._get_component(attr)
-        #             if attr in self.data_files_template:
-        #                 com_attr_dict[com].append(attr)
-
-        #         elif isinstance(attr, tuple):
-        #             for subattr in attr:
-        #                 com = self._get_component(subattr)
-        #                 if subattr in self.data_files_template:
-        #                     com_attr_dict[com].append(attr)
-
-        #     refined_data_files = {k: v for k, v in self.data_files_template.items() if k in downloaded_attrs}
-        #     ds: hfd.DatasetDict = hfd.load_dataset(path=HUGGING_FACE_REPO, data_files=refined_data_files, cache_dir="data")  # type: ignore
-        #     assert isinstance(ds, hfd.DatasetDict)
-        #     self.root = ds.with_format("numpy")
-        #     self.downloaded_attrs = downloaded_attrs
 
         def download_from_hf_backup(self):
             uni_list = set(self.sorted_node_attrs).union(self.sorted_edge_attrs).union(self.sorted_label_attrs).union(self.sorted_edge_label_attrs)
@@ -434,7 +407,9 @@ class GidaV7(Dataset):
         # load arrays from zip file (and input_paths)
         self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(wdn_names=self.wdn_names)
 
-        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self.length)
+        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(
+            self.split_ratios, num_samples=self.num_records if self.num_records is not None else self.length
+        )
 
     def process_subset_shuffle(self, custom_subset_shuffle_pt_path: str = "", create_and_save_to_dataset_log_if_nonexist: bool = True):
         if self.subset_shuffle:
@@ -510,23 +485,29 @@ class GidaV7(Dataset):
         len_of_list = len(self._num_samples_per_network_list)
         # if not split per network or existing a single network only, we split based on flatten ids
         if not self.split_per_network or len_of_list == 1:
-            left = int(num_samples * split_ratios[0])
-            right = int(left + num_samples * split_ratios[1])
+            left = int(self.length * split_ratios[0])
+            right = int(left + self.length * split_ratios[1])
 
             flatten_ids = np.asarray(list(self._index_map.keys()))
 
             flatten_ids = flatten_ids.tolist()
 
-            train_ids = flatten_ids[:left]
-            val_ids = flatten_ids[left:right]
-            test_ids = flatten_ids[right:]
+            selected_trains = int(num_samples * split_ratios[0])
+            selected_vals = int(num_samples * split_ratios[1])
+            selected_test = num_samples - selected_trains - selected_vals
+
+            train_ids = flatten_ids[:left][:selected_trains]
+            val_ids = flatten_ids[left:right][:selected_vals]
+            test_ids = flatten_ids[right:][:selected_test]
         else:
             # to split per network, we compute train/val/test individually
             # degree of freedom will be (len_of_list - 1)
-            expected_train_samples = int(num_samples * split_ratios[0])
-            expected_valid_samples = int(num_samples * split_ratios[1])
-            expected_test_samples = num_samples - expected_train_samples - expected_valid_samples
+            expected_train_samples = int(self.length * split_ratios[0])
+            expected_valid_samples = int(self.length * split_ratios[1])
+            expected_test_samples = self.length - expected_train_samples - expected_valid_samples
             flatten_ids = np.asarray(list(self._index_map.keys()))
+            num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
+
             current_nid = 0
             for i, network_num_samples in enumerate(self._num_samples_per_network_list):
                 network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
@@ -558,14 +539,21 @@ class GidaV7(Dataset):
                     network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
                     network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
 
+                selected_trains = int(num_samples_per_network * split_ratios[0])
+                selected_vals = int(num_samples_per_network * split_ratios[1])
+                selected_test = num_samples_per_network - selected_trains - selected_vals
+                network_train_ids = network_train_ids[:selected_trains]
+                network_val_ids = network_val_ids[:selected_vals]
+                network_test_ids = network_test_ids[:selected_test]
+
                 train_ids.extend(network_train_ids.tolist())
                 val_ids.extend(network_val_ids.tolist())
                 test_ids.extend(network_test_ids.tolist())
                 current_nid += network_num_samples
 
-            assert expected_train_samples == len(train_ids)
-            assert expected_valid_samples == len(val_ids)
-            assert expected_test_samples == len(test_ids)
+            # assert expected_train_samples == len(train_ids)
+            # assert expected_valid_samples == len(val_ids)
+            # assert expected_test_samples == len(test_ids)
 
         return train_ids, val_ids, test_ids
 
@@ -576,21 +564,36 @@ class GidaV7(Dataset):
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
         self.load_roots(wdn_names)
+        root_sizes: list[int] = [r.compute_first_size() for r in self._roots]
+        if self.batch_axis_choice == "scene":
+            sum_of_root_sizes = sum(root_sizes)
+        elif self.batch_axis_choice == "temporal":
+            sum_of_root_sizes = sum([r.time_dim for r in self._roots])
+        else:  # snapshot
+            sum_of_root_sizes = sum([r.time_dim * root_sizes[i] for i, r in enumerate(self._roots)])
+
+        total_num_samples: int = sum_of_root_sizes  # if self.num_records is None else min(sum_of_root_sizes, self.num_records)
+        num_samples_per_network = total_num_samples // len(self._roots)
+
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
                 # arr WILL have shape <merged>(#scenes, #nodes_or_#links, #statics + time_dims * #dynamics)
-                num_samples = root.compute_first_size() if self.num_records is None else min(root.compute_first_size(), self.num_records)
-                relative_scene_ids = np.arange(num_samples)
+                relative_scene_ids = np.arange(root_sizes[network_index])
+                relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
                 tuples = (relative_scene_ids, None)
             elif self.batch_axis_choice == "temporal":
-                num_samples = root.time_dim if self.num_records is None else min(root.time_dim, self.num_records)
-                relative_time_ids = np.arange(num_samples)
+                relative_time_ids = np.arange(root.time_dim)
+                relative_time_ids = relative_time_ids[:num_samples_per_network]
+                num_samples = len(relative_time_ids)
                 tuples = (None, relative_time_ids)
             elif self.batch_axis_choice == "snapshot":
-                num_scenes = root.compute_first_size() if self.num_records is None else min(root.compute_first_size(), self.num_records)
                 time_dim = root.time_dim
+                num_scenes = root_sizes[network_index]
                 relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
                 relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                relative_time_ids = relative_time_ids[:num_samples_per_network]
                 tuples = (relative_scene_ids, relative_time_ids)
                 num_samples = len(relative_scene_ids)
             else:
@@ -1349,18 +1352,10 @@ class GidaV7(Dataset):
                 num_channels = channel_splitters[i]
                 t = flatten_array[:, current_idx : current_idx + num_channels]
 
-                # t = t.flatten()
                 current_idx += num_channels
 
                 t_std_val, t_mean_val = t.std(axis=norm_dim), t.mean(axis=norm_dim)
-                # torch.std_mean(t, dim=norm_dim)
                 t_min_val, t_max_val = t.min(axis=norm_dim), t.max(axis=norm_dim)
-                # torch.min(t, dim=norm_dim).values, torch.max(t, dim=norm_dim).values
-
-                # std_vals.append(t_std_val.reshape([-1]).repeat(num_channels))
-                # mean_vals.append(t_mean_val.reshape([-1]).repeat(num_channels))
-                # min_vals.append(t_min_val.reshape([-1]).repeat(num_channels))
-                # max_vals.append(t_max_val.reshape([-1]).repeat(num_channels))
 
                 if norm_dim is not None:
                     t_std_val = np.expand_dims(t_std_val, axis=norm_dim)
@@ -1407,26 +1402,6 @@ class GidaV7(Dataset):
             mean_val = from_numpy(mean_val)
             min_val = from_numpy(min_val)
             max_val = from_numpy(max_val)
-
-        # save to reuse
-        # my_dict = {
-        #     "min_val": min_val,
-        #     "max_val": max_val,
-        #     "mean_val": mean_val,
-        #     "std_val": std_val,
-        #     f"{which_array}_min_val": min_val,
-        #     f"{which_array}_max_val": max_val,
-        #     f"{which_array}_mean_val": mean_val,
-        #     f"{which_array}_std_val": std_val,
-        # }
-
-        # if self.dataset_log_pt_path != "" and do_save:
-        #     self.save_dataset_checkpoint(**my_dict)
-        # else:
-        #     print(
-        #         "WARN! Statistic cannot be saved as `dataset_log_pt_path` is empty or `do_save` is set False in Gida Interface! You cannot re-load these stats in the inference or next train!",  # noqa: E501
-        #         flush=True,
-        #     )
 
         return (min_val, max_val, mean_val, std_val)
 
