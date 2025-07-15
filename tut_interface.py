@@ -12,8 +12,6 @@ from ditec_wdn_dataset.core.datasets_large import GidaV6
 from ditec_wdn_dataset.hf.dataset import GidaV7
 from ditec_wdn_dataset.utils.configs import GidaConfig
 
-from torch_geometric.data import Batch
-
 
 def tutorial_v6(gida_yaml_path: str) -> list[GidaV6]:
     gida_config = GidaConfig()
@@ -97,5 +95,27 @@ def tutorial_v7(gida_yaml_path: str) -> list[GidaV7]:
 
 
 if __name__ == "__main__":
-    tutorial_v6("ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml")
-    tutorial_v7("ditec_wdn_dataset/arguments/test_data_interface_v7_config.yaml")
+    # they are minimal examples loaded from configs
+    # tutorial_v6("ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml")
+    # tutorial_v7("ditec_wdn_dataset/arguments/test_data_interface_v7_config.yaml")
+
+    # this is a minimal example for the data interface
+    full_gida = GidaV7(
+        wdn_names=["CTOWN_1GB_24H"],
+        node_attrs=["pressure", GidaV7.Node_Elevation],
+        edge_attrs=["pipe_diameter"],
+        edge_label_attrs=[],  # keep it empty if unsed,
+        label_attrs=["demand"],
+        num_records=100,  # keep it small to prevent OOM
+        batch_axis_choice="scene",  # record unit (scenario)
+        verbose=True,  # for more details
+    )
+    print(len(full_gida.train_ids))
+    train_set = full_gida.get_set(full_gida.train_ids)
+    print(next(iter(train_set)))
+    print(len(full_gida.val_ids))
+    valid_set = full_gida.get_set(full_gida.val_ids)
+    print(next(iter(valid_set)))
+    print(len(full_gida.test_ids))
+    test_set = full_gida.get_set(full_gida.test_ids)
+    print(next(iter(test_set)))
