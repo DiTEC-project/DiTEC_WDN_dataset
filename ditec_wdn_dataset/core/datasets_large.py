@@ -4,20 +4,18 @@
 # ------------------------------
 # Purpose: (Dec 12 2024) BACK UP OF DATASETS_LARGE.PY
 # ------------------------------
-
 from collections import OrderedDict, defaultdict
 import copy
-from datetime import datetime
 import glob
 from itertools import compress
 import json
-import pickle
 import os
 from typing import Any, Iterator, Literal, Optional, Sequence, Union
 import zipfile
 import numpy as np
 import torch
 import zarr
+from ditec_wdn_dataset.utils.profiler import WatcherManager
 from ditec_wdn_dataset.utils.auxil_v8 import (
     get_adj_list,
     get_object_name_list_by_component,
@@ -37,7 +35,6 @@ from torch import Tensor, from_numpy, save, load
 import dask.array.core as dac
 import dask.array as da
 from dask.base import compute
-from ditec_wdn_dataset.utils.profiler import WatcherManager
 from dask.dataframe.io.csv import read_csv
 
 LARGE_NUMBER = 10000
@@ -189,6 +186,7 @@ class GidaV6(Dataset):
         verbose: bool = True,
         split_type: Literal["temporal", "scene"] = "scene",
         split_set: Literal["train", "val", "test", "all"] = "all",
+        split_fixed: bool = True,
         split_per_network: bool = True,
         skip_nodes_list: list[list[str]] = [],
         skip_types_list: list[list[str]] = [],
@@ -218,6 +216,7 @@ class GidaV6(Dataset):
             verbose (bool, optional): flag indicates whether logging debug info. Defaults to True.
             split_type (Literal[&quot;temporal&quot;, &quot;scene&quot;], optional): Deprecated. Defaults to "scene".
             split_set (Literal[&quot;train&quot;, &quot;val&quot;, &quot;test&quot;, &quot;all&quot;], optional): to split subsets. Defaults to "all".
+            split_fixed (bool, optional): flag indicates whether the cutting positions are pre-defined (fixed) or dynamic
             split_per_network (bool, optional): If True, foreach network, we split train, valid, test individually (Useful for multiple network joint-training). Otherwise, we concatenate all networks into a single to-be-splitted array
             skip_nodes_list (list[list[str]], optional): add extra skipped node names, otherwise, load skip_nodes in zarr zip files. Defaults to [].
             skip_types_list (list[list[str]], optional): massively skip by node types (juctions, reservoir, tank). Defaults to [].
@@ -252,6 +251,7 @@ class GidaV6(Dataset):
         self.skip_types_list = skip_types_list
         self.split_type: Literal["temporal", "scene"] = split_type
         self.split_ratios: tuple[float, float, float] = (0.6, 0.2, 0.2)
+        self.split_fixed = split_fixed
         self.split_per_network = split_per_network
         self._arrays: list[tuple[zarr.Array, zarr.Array, zarr.Array | None, zarr.Array | None, zarr.Array | None]] = []
         self._index_map: dict[int, tuple[int | None, int | None]] = {}
@@ -280,6 +280,12 @@ class GidaV6(Dataset):
         if self._indices is None:
             self.update_indices()
 
+    def _get_num_samples(self) -> int:
+        if self.split_fixed:
+            return self.num_records if self.num_records is not None else self.length
+        else:
+            return self.length
+
     def custom_process(self) -> None:
         # load arrays from zip file (and input_paths)
         self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(
@@ -287,7 +293,7 @@ class GidaV6(Dataset):
             input_paths=self.input_paths,
         )
 
-        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self.length)
+        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self._get_num_samples())
 
     def update_indices(self) -> None:
         # update _indices
@@ -307,47 +313,48 @@ class GidaV6(Dataset):
             new_test_ids, test_shuffle_ids = shuffle_list(self.test_ids)
             return new_train_ids, new_val_ids, new_test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids
         elif sampling_strategy == "random":
-            train_ids = np.asarray(self.train_ids)
-            val_ids = np.asarray(self.val_ids)
-            test_ids = np.asarray(self.test_ids)
+            raise NotImplementedError
+            # train_ids = np.asarray(self.train_ids)
+            # val_ids = np.asarray(self.val_ids)
+            # test_ids = np.asarray(self.test_ids)
 
-            train_shuffle_ids = []
-            val_shuffle_ids = []
-            test_shuffle_ids = []
-            start_train_idx = start_val_idx = start_test_idx = 0
-            for network_length in self._num_samples_per_network_list:
-                network_num_trains = int(network_length * self.split_ratios[0])
-                network_num_vals = int(network_length * self.split_ratios[1])
-                network_num_tests = network_length - network_num_trains - network_num_vals
+            # train_shuffle_ids = []
+            # val_shuffle_ids = []
+            # test_shuffle_ids = []
+            # start_train_idx = start_val_idx = start_test_idx = 0
+            # for network_length in self._num_samples_per_network_list:
+            #     network_num_trains = int(network_length * self.split_ratios[0])
+            #     network_num_vals = int(network_length * self.split_ratios[1])
+            #     network_num_tests = network_length - network_num_trains - network_num_vals
 
-                # extract network subset, shuffle, reassign
-                tmp_subset = train_ids[start_train_idx : start_train_idx + network_num_trains]
-                tmp_shuffle_ids = np.random.permutation(network_num_trains)
-                tmp_subset = tmp_subset[tmp_shuffle_ids]
-                train_ids[start_train_idx : start_train_idx + network_num_trains] = tmp_subset
-                train_shuffle_ids.extend(start_train_idx + tmp_shuffle_ids)
+            #     # extract network subset, shuffle, reassign
+            #     tmp_subset = train_ids[start_train_idx : start_train_idx + network_num_trains]
+            #     tmp_shuffle_ids = np.random.permutation(network_num_trains)
+            #     tmp_subset = tmp_subset[tmp_shuffle_ids]
+            #     train_ids[start_train_idx : start_train_idx + network_num_trains] = tmp_subset
+            #     train_shuffle_ids.extend(start_train_idx + tmp_shuffle_ids)
 
-                tmp_subset = val_ids[start_val_idx : start_val_idx + network_num_vals]
-                tmp_shuffle_ids = np.random.permutation(network_num_vals)
-                tmp_subset = tmp_subset[tmp_shuffle_ids]
-                val_ids[start_val_idx : start_val_idx + network_num_vals] = tmp_subset
-                val_shuffle_ids.extend(start_val_idx + tmp_shuffle_ids)
+            #     tmp_subset = val_ids[start_val_idx : start_val_idx + network_num_vals]
+            #     tmp_shuffle_ids = np.random.permutation(network_num_vals)
+            #     tmp_subset = tmp_subset[tmp_shuffle_ids]
+            #     val_ids[start_val_idx : start_val_idx + network_num_vals] = tmp_subset
+            #     val_shuffle_ids.extend(start_val_idx + tmp_shuffle_ids)
 
-                tmp_subset = test_ids[start_test_idx : start_test_idx + network_num_tests]
-                tmp_shuffle_ids = np.random.permutation(network_num_tests)
-                tmp_subset = tmp_subset[tmp_shuffle_ids]
-                test_ids[start_test_idx : start_test_idx + network_num_tests] = tmp_subset
-                test_shuffle_ids.extend(start_test_idx + tmp_shuffle_ids)
+            #     tmp_subset = test_ids[start_test_idx : start_test_idx + network_num_tests]
+            #     tmp_shuffle_ids = np.random.permutation(network_num_tests)
+            #     tmp_subset = tmp_subset[tmp_shuffle_ids]
+            #     test_ids[start_test_idx : start_test_idx + network_num_tests] = tmp_subset
+            #     test_shuffle_ids.extend(start_test_idx + tmp_shuffle_ids)
 
-                # update start indices
-                start_train_idx += network_num_trains
-                start_val_idx += network_num_vals
-                start_test_idx += network_num_tests
+            #     # update start indices
+            #     start_train_idx += network_num_trains
+            #     start_val_idx += network_num_vals
+            #     start_test_idx += network_num_tests
 
-            # assert np.allclose(train_ids, np.asarray(self.train_ids)[train_shuffle_ids])
-            # assert np.allclose(val_ids, np.asarray(self.val_ids)[val_shuffle_ids])
-            # assert np.allclose(test_ids, np.asarray(self.test_ids)[test_shuffle_ids])
-            return train_ids.tolist(), val_ids.tolist(), test_ids.tolist(), train_shuffle_ids, val_shuffle_ids, test_shuffle_ids
+            # # assert np.allclose(train_ids, np.asarray(self.train_ids)[train_shuffle_ids])
+            # # assert np.allclose(val_ids, np.asarray(self.val_ids)[val_shuffle_ids])
+            # # assert np.allclose(test_ids, np.asarray(self.test_ids)[test_shuffle_ids])
+            # return train_ids.tolist(), val_ids.tolist(), test_ids.tolist(), train_shuffle_ids, val_shuffle_ids, test_shuffle_ids
 
         else:
             raise NotImplementedError
@@ -362,7 +369,7 @@ class GidaV6(Dataset):
                     # otherwise, we perform shuffle and store ids in a saving folder
 
                     new_train_ids, new_val_ids, new_test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids = self._internal_subset_shuffle(
-                        sampling_strategy="random"
+                        sampling_strategy="default"
                     )
 
                     if self.dataset_log_pt_path != "" and create_and_save_to_dataset_log_if_nonexist:
@@ -440,28 +447,32 @@ class GidaV6(Dataset):
         len_of_list = len(self._num_samples_per_network_list)
         # if not split per network or existing a single network only, we split based on flatten ids
         if not self.split_per_network or len_of_list == 1:
-            left = int(num_samples * split_ratios[0])
-            right = int(left + num_samples * split_ratios[1])
+            left = int(self.length * split_ratios[0])
+            right = int(left + self.length * split_ratios[1])
 
             flatten_ids = np.asarray(list(self._index_map.keys()))
 
             flatten_ids = flatten_ids.tolist()
-
             train_ids = flatten_ids[:left]
             val_ids = flatten_ids[left:right]
             test_ids = flatten_ids[right:]
+            if self.split_fixed:
+                selected_trains = int(num_samples * split_ratios[0])
+                selected_vals = int(num_samples * split_ratios[1])
+                selected_test = num_samples - selected_trains - selected_vals
+
+                train_ids = train_ids[:selected_trains]
+                val_ids = val_ids[:selected_vals]
+                test_ids = test_ids[:selected_test]
         else:
             # to split per network, we compute train/val/test individually
             # degree of freedom will be (len_of_list - 1)
-            expected_train_samples = int(num_samples * split_ratios[0])
-            expected_valid_samples = int(num_samples * split_ratios[1])
-            expected_test_samples = num_samples - expected_train_samples - expected_valid_samples
+            expected_train_samples = int(self.length * split_ratios[0])
+            expected_valid_samples = int(self.length * split_ratios[1])
+            expected_test_samples = self.length - expected_train_samples - expected_valid_samples
             flatten_ids = np.asarray(list(self._index_map.keys()))
 
-            # per_network_train_samples = expected_train_samples // len_of_list
-            # per_network_valid_samples = expected_valid_samples // len_of_list
-            # per_network_test_samples = expected_test_samples // len_of_list
-
+            num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
             current_nid = 0
             for i, network_num_samples in enumerate(self._num_samples_per_network_list):
                 network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
@@ -493,116 +504,14 @@ class GidaV6(Dataset):
                     network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
                     network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
 
-                #     network_train_ids = network_train_ids[:per_network_train_samples]
-                #     network_val_ids = network_val_ids[:per_network_valid_samples]
-                #     network_test_ids = network_test_ids[:per_network_test_samples]
-                # else:
-                #     network_train_ids = network_train_ids[:per_network_train_samples]
-                #     network_val_ids = network_val_ids[:per_network_valid_samples]
-                #     network_test_ids = network_test_ids[:per_network_test_samples]
+                if self.split_fixed:
+                    selected_trains = int(num_samples_per_network * split_ratios[0])
+                    selected_vals = int(num_samples_per_network * split_ratios[1])
+                    selected_test = num_samples_per_network - selected_trains - selected_vals
+                    network_train_ids = network_train_ids[:selected_trains]
+                    network_val_ids = network_val_ids[:selected_vals]
+                    network_test_ids = network_test_ids[:selected_test]
 
-                train_ids.extend(network_train_ids.tolist())
-                val_ids.extend(network_val_ids.tolist())
-                test_ids.extend(network_test_ids.tolist())
-                current_nid += network_num_samples
-
-            # assert expected_train_samples == len(train_ids)
-            # assert expected_valid_samples == len(val_ids)
-            # assert expected_test_samples == len(test_ids)
-
-        return train_ids, val_ids, test_ids
-
-    def _compute_subset_ids(
-        self,
-        split_ratios: tuple[float, float, float],
-        num_samples: int,
-        custom_subset_shuffle_pt_path: str,
-        create_and_save_to_dataset_log_if_nonexist: bool,
-    ) -> tuple[list[int], list[int], list[int]]:
-        train_ids, val_ids, test_ids = [], [], []
-        len_of_list = len(self._num_samples_per_network_list)
-        num_trains = int(num_samples * split_ratios[0])
-        num_vals = int(num_samples * split_ratios[1])
-        num_tests = num_samples - num_trains - num_vals
-        if not self.split_per_network or len_of_list == 1:
-            left = int(self.length * split_ratios[0])
-            right = int(left + self.length * split_ratios[1])
-            flatten_ids = np.asarray(list(self._index_map.keys()))
-            train_ids = flatten_ids[:left]
-            val_ids = flatten_ids[left:right]
-            test_ids = flatten_ids[right:]
-            len_train_ids = len(train_ids)
-            len_val_ids = len(val_ids)
-            len_test_ids = len(test_ids)
-            if self.subset_shuffle:
-                train_ids = train_ids[np.random.permutation(len_train_ids)]
-                val_ids = val_ids[np.random.permutation(len_val_ids)]
-                test_ids = test_ids[np.random.permutation(len_test_ids)]
-            # second-level triming
-            train_ids = train_ids[:num_trains].tolist()
-            val_ids = val_ids[:num_vals].tolist()
-            test_ids = test_ids[:num_tests].tolist()
-        else:
-            # to split per network, we compute train/val/test individually
-            # degree of freedom will be (len_of_list - 1)
-            expected_train_samples = int(self.length * split_ratios[0])
-            expected_valid_samples = int(self.length * split_ratios[1])
-            expected_test_samples = self.length - expected_train_samples - expected_valid_samples
-            flatten_ids = np.asarray(list(self._index_map.keys()))
-
-            indi_num_trains = num_trains // len_of_list
-            indi_num_vals = num_vals // len_of_list
-            indi_num_tests = num_tests // len_of_list
-
-            current_nid = 0
-            for i, network_num_samples in enumerate(self._num_samples_per_network_list):
-                network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
-
-                if self.batch_axis_choice == "snapshot":
-                    # with snapshots, we still split by scence to ensure the scenario independence
-                    # f_0-> (n_0, t_0), f_1 -> (n_0, t_1), ..., f_T -> (n_0, t_T), f_T+1 -> (n_1, t_0), ...
-                    time_dim = self._roots[i].time_dim
-                    num_scenes = len(network_flatten_ids) // time_dim
-                    left = int(num_scenes * split_ratios[0])
-                    right = int(left + num_scenes * split_ratios[1])
-
-                    left = left * time_dim
-                    right = right * time_dim
-
-                    network_train_ids = network_flatten_ids[:left]
-                    network_val_ids = network_flatten_ids[left:right]
-                    network_test_ids = network_flatten_ids[right:]
-
-                else:
-                    left = int(network_num_samples * split_ratios[0])
-                    right = int(left + network_num_samples * split_ratios[1])
-                    network_train_ids = network_flatten_ids[:left]
-                    network_val_ids = network_flatten_ids[left:right]
-                    network_test_ids = network_flatten_ids[right:]
-
-                len_train_ids = len(train_ids)
-                len_val_ids = len(val_ids)
-                len_test_ids = len(test_ids)
-                if i == len_of_list - 1:
-                    network_train_ids = network_train_ids[: expected_train_samples - len_train_ids]
-                    network_val_ids = network_val_ids[: expected_valid_samples - len_val_ids]
-                    network_test_ids = network_test_ids[: expected_test_samples - len_test_ids]
-
-                # second-level triming
-                if self.subset_shuffle:
-                    network_train_ids = network_train_ids[np.random.permutation(len_train_ids)]
-                    network_val_ids = network_val_ids[np.random.permutation(len_val_ids)]
-                    network_test_ids = network_test_ids[np.random.permutation(len_test_ids)]
-
-                if i < len_of_list - 1:
-                    network_train_ids = network_train_ids[:indi_num_trains]
-                    network_val_ids = network_val_ids[:indi_num_vals]
-                    network_test_ids = network_test_ids[:indi_num_tests]
-                else:
-                    network_train_ids = network_train_ids[: num_trains - len(train_ids)]
-                    network_val_ids = network_val_ids[: num_vals - len(val_ids)]
-                    network_test_ids = network_test_ids[: num_tests - len(test_ids)]
-                # TODO: Dealing with sampling strategy
                 train_ids.extend(network_train_ids.tolist())
                 val_ids.extend(network_val_ids.tolist())
                 test_ids.extend(network_test_ids.tolist())
@@ -619,23 +528,56 @@ class GidaV6(Dataset):
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
         self.load_roots(zip_file_paths, input_paths)
+
+        root_sizes: list[int] = [r.compute_first_size() for r in self._roots]
+        if self.batch_axis_choice == "scene":
+            sum_of_root_sizes = sum(root_sizes)
+        elif self.batch_axis_choice == "temporal":
+            sum_of_root_sizes = sum([r.time_dim for r in self._roots])
+        else:  # snapshot
+            sum_of_root_sizes = sum([r.time_dim * root_sizes[i] for i, r in enumerate(self._roots)])
+
+        total_num_samples: int = sum_of_root_sizes  # if self.num_records is None else min(sum_of_root_sizes, self.num_records)
+        num_samples_per_network = total_num_samples // len(self._roots)
+
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
                 # arr WILL have shape <merged>(#scenes, #nodes_or_#links, #statics + time_dims * #dynamics)
-                num_samples = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
-                relative_scene_ids = np.arange(num_samples)
+                if self.split_fixed:
+                    relative_scene_ids = np.arange(root_sizes[network_index])
+                    relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                    num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
+                else:
+                    num_samples = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    relative_scene_ids = np.arange(num_samples)
                 tuples = (relative_scene_ids, None)
             elif self.batch_axis_choice == "temporal":
-                num_samples = root.time_dim
-                relative_time_ids = np.arange(num_samples)
+                if self.split_fixed:
+                    relative_time_ids = np.arange(root.time_dim)
+                    relative_time_ids = relative_time_ids[:num_samples_per_network]
+                    num_samples = len(relative_time_ids)
+                else:
+                    num_samples = root.time_dim
+                    relative_time_ids = np.arange(num_samples)
                 tuples = (None, relative_time_ids)
+
             elif self.batch_axis_choice == "snapshot":
-                num_scenes = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
-                time_dim = root.time_dim
-                relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
-                relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                if self.split_fixed:
+                    time_dim = root.time_dim
+                    num_scenes = root_sizes[network_index]
+                    relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
+                    relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                    relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                    relative_time_ids = relative_time_ids[:num_samples_per_network]
+                    num_samples = len(relative_scene_ids)
+                else:
+                    num_scenes = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    time_dim = root.time_dim
+                    relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
+                    relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                    tuples = (relative_scene_ids, relative_time_ids)
+                    num_samples = len(relative_scene_ids)
                 tuples = (relative_scene_ids, relative_time_ids)
-                num_samples = len(relative_scene_ids)
             else:
                 raise NotImplementedError
             extended_network_ids = np.full([num_samples], network_index)
@@ -933,7 +875,7 @@ class GidaV6(Dataset):
 
     def len(self) -> int:
         r"""Returns the number of data objects stored in the dataset."""
-        return self.length  # len(self._arrays)
+        return self.length
 
     def get_set(
         self,
@@ -954,17 +896,16 @@ class GidaV6(Dataset):
         dataset = copy.copy(self)
         for k, v in kwargs.items():
             setattr(dataset, k, v)
-
         if sampling_strategy == "sequential":
             dataset._indices = ids[:num_records]
         elif sampling_strategy == "interval":
-            if num_records is None:
+            if num_records is None or len(ids) <= num_records:
                 dataset._indices = ids
             else:
-                step_size = max(1, len(ids) // max(len(self._roots), num_records))
-
+                # step size  depends on by #neworks (len(self._roots)) or num_records
+                # step_size = max(1, len(ids) // max(len(self._roots), num_records))
+                step_size = max(1, len(ids) // num_records)
                 tmp_ids = ids[::step_size]
-                assert len(tmp_ids) >= num_records
 
                 dataset._indices = tmp_ids[:num_records]
         dataset.length = len(dataset._indices)
@@ -1158,7 +1099,6 @@ class GidaV6(Dataset):
         return cat_array
 
     def get(self, idx: int | Sequence) -> Any:
-        # return Data or list[Data]
         assert self._indices is not None
         if isinstance(idx, int):
             fids: list[int] = self._indices[idx]  # [idx]  #
@@ -1273,7 +1213,7 @@ class GidaV6(Dataset):
             "edge_label": getattr(self._roots[0], "sorted_edge_label_attrs"),
         }
 
-        time_dim = self._roots[0].time_dim  # self._roots[0].attrs["duration"] // self._roots[0].attrs["time_step"]
+        time_dim = self._roots[0].time_dim
         param_attrs = which_array_attrs_map[which_array]
         assert param_attrs is not None and len(param_attrs) > 0, f"ERROR! No found paramattrs from which_array=({which_array}): ({param_attrs})"
         channel_splitters = [
@@ -1325,14 +1265,7 @@ class GidaV6(Dataset):
                 current_idx += num_channels
 
                 t_std_val, t_mean_val = t.std(axis=norm_dim), t.mean(axis=norm_dim)
-                # torch.std_mean(t, dim=norm_dim)
                 t_min_val, t_max_val = t.min(axis=norm_dim), t.max(axis=norm_dim)
-                # torch.min(t, dim=norm_dim).values, torch.max(t, dim=norm_dim).values
-
-                # std_vals.append(t_std_val.reshape([-1]).repeat(num_channels))
-                # mean_vals.append(t_mean_val.reshape([-1]).repeat(num_channels))
-                # min_vals.append(t_min_val.reshape([-1]).repeat(num_channels))
-                # max_vals.append(t_max_val.reshape([-1]).repeat(num_channels))
 
                 if norm_dim is not None:
                     t_std_val = np.expand_dims(t_std_val, axis=norm_dim)
@@ -1379,26 +1312,6 @@ class GidaV6(Dataset):
             mean_val = from_numpy(mean_val)
             min_val = from_numpy(min_val)
             max_val = from_numpy(max_val)
-
-        # save to reuse
-        # my_dict = {
-        #     "min_val": min_val,
-        #     "max_val": max_val,
-        #     "mean_val": mean_val,
-        #     "std_val": std_val,
-        #     f"{which_array}_min_val": min_val,
-        #     f"{which_array}_max_val": max_val,
-        #     f"{which_array}_mean_val": mean_val,
-        #     f"{which_array}_std_val": std_val,
-        # }
-
-        # if self.dataset_log_pt_path != "" and do_save:
-        #     self.save_dataset_checkpoint(**my_dict)
-        # else:
-        #     print(
-        #         "WARN! Statistic cannot be saved as `dataset_log_pt_path` is empty or `do_save` is set False in Gida Interface! You cannot re-load these stats in the inference or next train!",  # noqa: E501
-        #         flush=True,
-        #     )
 
         return (min_val, max_val, mean_val, std_val)
 
