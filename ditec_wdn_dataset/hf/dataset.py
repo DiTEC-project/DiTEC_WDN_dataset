@@ -1,18 +1,15 @@
 import json
-from typing import Optional
 import numpy as np
 import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
-import tempfile
 from collections import OrderedDict, defaultdict
 import copy
 from itertools import compress
-import json
+import tempfile
 import os
 from typing import Any, Literal, Optional, Sequence, Union
-import numpy as np
 import torch
-from wntr.network import WaterNetworkModel
+from torch import Tensor, from_numpy, save, load
 from ditec_wdn_dataset.utils.auxil_v8 import (
     get_object_name_list_by_component,
     is_node_simulation_output,
@@ -20,11 +17,10 @@ from ditec_wdn_dataset.utils.auxil_v8 import (
     masking_list,
     get_all_simulation_output_parameters,
 )
-import tempfile
 from torch_geometric.data.data import BaseData
 from torch_geometric.data import Dataset, Data, Batch
 
-from torch import Tensor, from_numpy, save, load
+from wntr.network import WaterNetworkModel
 
 import dask.array.core as dac
 from dask.base import compute
@@ -301,6 +297,7 @@ class GidaV7(Dataset):
         verbose: bool = True,
         split_type: Literal["temporal", "scene"] = "scene",
         split_set: Literal["train", "val", "test", "all"] = "all",
+        split_fixed: bool = False,
         split_per_network: bool = True,
         skip_nodes_list: list[list[str]] = [],
         skip_types_list: list[list[str]] = [],
@@ -330,6 +327,7 @@ class GidaV7(Dataset):
             verbose (bool, optional): flag indicates whether logging debug info. Defaults to True.
             split_type (Literal[&quot;temporal&quot;, &quot;scene&quot;], optional): Deprecated. Defaults to "scene".
             split_set (Literal[&quot;train&quot;, &quot;val&quot;, &quot;test&quot;, &quot;all&quot;], optional): to split subsets. Defaults to "all".
+            split_fixed (bool, optional): flag indicates whether the cutting positions are pre-defined (fixed) or dynamic
             split_per_network (bool, optional): If True, foreach network, we split train, valid, test individually (Useful for multiple network joint-training). Otherwise, we concatenate all networks into a single to-be-splitted array
             skip_nodes_list (list[list[str]], optional): add extra skipped node names, otherwise, load skip_nodes in zarr zip files. Defaults to [].
             skip_types_list (list[list[str]], optional): massively skip by node types (juctions, reservoir, tank). Defaults to [].
@@ -354,7 +352,7 @@ class GidaV7(Dataset):
         self.edge_label_attrs = [att if isinstance(att, str) else tuple(att) for att in edge_label_attrs] if edge_label_attrs else []
 
         if "headpump_base_speed" in self.edge_attrs or "headpump_base_speed" in self.label_attrs or "headpump_base_speed" in self.edge_label_attrs:
-            print("WARNING! headpump_base_speed attribute is under validation phase!")
+            print("WARN! headpump_base_speed attribute is under validation phase!")
 
         self.verbose = verbose
         self.num_records = num_records
@@ -364,6 +362,9 @@ class GidaV7(Dataset):
         self.skip_types_list = skip_types_list
         self.split_type: Literal["temporal", "scene"] = split_type
         self.split_ratios: tuple[float, float, float] = (0.6, 0.2, 0.2)
+        if split_fixed:
+            print("WARN! GidaV7 requires split_fixed set to False!")
+        self.split_fixed = False
         self.split_per_network = split_per_network
         # self._arrays: list[tuple[zarr.Array, zarr.Array, zarr.Array | None, zarr.Array | None, zarr.Array | None]] = []
         self._index_map: dict[int, tuple[int | None, int | None]] = {}
@@ -403,13 +404,17 @@ class GidaV7(Dataset):
             assert self._index_map is not None and len(self._index_map) > 0
             self._indices = list(self._index_map.keys())
 
+    def _get_num_samples(self) -> int:
+        if self.split_fixed:
+            return self.num_records if self.num_records is not None else self.length
+        else:
+            return self.length
+
     def custom_process(self) -> None:
         # load arrays from zip file (and input_paths)
         self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(wdn_names=self.wdn_names)
 
-        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(
-            self.split_ratios, num_samples=self.num_records if self.num_records is not None else self.length
-        )
+        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self._get_num_samples())
 
     def process_subset_shuffle(self, custom_subset_shuffle_pt_path: str = "", create_and_save_to_dataset_log_if_nonexist: bool = True):
         if self.subset_shuffle:
@@ -491,14 +496,17 @@ class GidaV7(Dataset):
             flatten_ids = np.asarray(list(self._index_map.keys()))
 
             flatten_ids = flatten_ids.tolist()
+            train_ids = flatten_ids[:left]
+            val_ids = flatten_ids[left:right]
+            test_ids = flatten_ids[right:]
+            if self.split_fixed:
+                selected_trains = int(num_samples * split_ratios[0])
+                selected_vals = int(num_samples * split_ratios[1])
+                selected_test = num_samples - selected_trains - selected_vals
 
-            selected_trains = int(num_samples * split_ratios[0])
-            selected_vals = int(num_samples * split_ratios[1])
-            selected_test = num_samples - selected_trains - selected_vals
-
-            train_ids = flatten_ids[:left][:selected_trains]
-            val_ids = flatten_ids[left:right][:selected_vals]
-            test_ids = flatten_ids[right:][:selected_test]
+                train_ids = train_ids[:selected_trains]
+                val_ids = val_ids[:selected_vals]
+                test_ids = test_ids[:selected_test]
         else:
             # to split per network, we compute train/val/test individually
             # degree of freedom will be (len_of_list - 1)
@@ -506,8 +514,8 @@ class GidaV7(Dataset):
             expected_valid_samples = int(self.length * split_ratios[1])
             expected_test_samples = self.length - expected_train_samples - expected_valid_samples
             flatten_ids = np.asarray(list(self._index_map.keys()))
-            num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
 
+            num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
             current_nid = 0
             for i, network_num_samples in enumerate(self._num_samples_per_network_list):
                 network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
@@ -539,21 +547,18 @@ class GidaV7(Dataset):
                     network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
                     network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
 
-                selected_trains = int(num_samples_per_network * split_ratios[0])
-                selected_vals = int(num_samples_per_network * split_ratios[1])
-                selected_test = num_samples_per_network - selected_trains - selected_vals
-                network_train_ids = network_train_ids[:selected_trains]
-                network_val_ids = network_val_ids[:selected_vals]
-                network_test_ids = network_test_ids[:selected_test]
+                if self.split_fixed:
+                    selected_trains = int(num_samples_per_network * split_ratios[0])
+                    selected_vals = int(num_samples_per_network * split_ratios[1])
+                    selected_test = num_samples_per_network - selected_trains - selected_vals
+                    network_train_ids = network_train_ids[:selected_trains]
+                    network_val_ids = network_val_ids[:selected_vals]
+                    network_test_ids = network_test_ids[:selected_test]
 
                 train_ids.extend(network_train_ids.tolist())
                 val_ids.extend(network_val_ids.tolist())
                 test_ids.extend(network_test_ids.tolist())
                 current_nid += network_num_samples
-
-            # assert expected_train_samples == len(train_ids)
-            # assert expected_valid_samples == len(val_ids)
-            # assert expected_test_samples == len(test_ids)
 
         return train_ids, val_ids, test_ids
 
@@ -564,6 +569,7 @@ class GidaV7(Dataset):
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
         self.load_roots(wdn_names)
+
         root_sizes: list[int] = [r.compute_first_size() for r in self._roots]
         if self.batch_axis_choice == "scene":
             sum_of_root_sizes = sum(root_sizes)
@@ -578,24 +584,41 @@ class GidaV7(Dataset):
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
                 # arr WILL have shape <merged>(#scenes, #nodes_or_#links, #statics + time_dims * #dynamics)
-                relative_scene_ids = np.arange(root_sizes[network_index])
-                relative_scene_ids = relative_scene_ids[:num_samples_per_network]
-                num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
+                if self.split_fixed:
+                    relative_scene_ids = np.arange(root_sizes[network_index])
+                    relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                    num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
+                else:
+                    num_samples = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    relative_scene_ids = np.arange(num_samples)
                 tuples = (relative_scene_ids, None)
             elif self.batch_axis_choice == "temporal":
-                relative_time_ids = np.arange(root.time_dim)
-                relative_time_ids = relative_time_ids[:num_samples_per_network]
-                num_samples = len(relative_time_ids)
+                if self.split_fixed:
+                    relative_time_ids = np.arange(root.time_dim)
+                    relative_time_ids = relative_time_ids[:num_samples_per_network]
+                    num_samples = len(relative_time_ids)
+                else:
+                    num_samples = root.time_dim
+                    relative_time_ids = np.arange(num_samples)
                 tuples = (None, relative_time_ids)
+
             elif self.batch_axis_choice == "snapshot":
-                time_dim = root.time_dim
-                num_scenes = root_sizes[network_index]
-                relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
-                relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
-                relative_scene_ids = relative_scene_ids[:num_samples_per_network]
-                relative_time_ids = relative_time_ids[:num_samples_per_network]
+                if self.split_fixed:
+                    time_dim = root.time_dim
+                    num_scenes = root_sizes[network_index]
+                    relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
+                    relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                    relative_scene_ids = relative_scene_ids[:num_samples_per_network]
+                    relative_time_ids = relative_time_ids[:num_samples_per_network]
+                    num_samples = len(relative_scene_ids)
+                else:
+                    num_scenes = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    time_dim = root.time_dim
+                    relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
+                    relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
+                    tuples = (relative_scene_ids, relative_time_ids)
+                    num_samples = len(relative_scene_ids)
                 tuples = (relative_scene_ids, relative_time_ids)
-                num_samples = len(relative_scene_ids)
             else:
                 raise NotImplementedError
             extended_network_ids = np.full([num_samples], network_index)
@@ -886,7 +909,6 @@ class GidaV7(Dataset):
         for attr in attrs:
             if isinstance(attr, str):
                 stripped_attr = self.strip_asterisk([attr])[0]
-
                 if stripped_attr in root.array_keys:
                     sorted_list.append(stripped_attr)
                     has_asterisks.append("*" in attr)
@@ -913,6 +935,7 @@ class GidaV7(Dataset):
         self,
         ids: list[int],
         num_records: Optional[int] = None,
+        sampling_strategy: Literal["sequential", "interval"] = "sequential",
         **kwargs: Any,
     ) -> Dataset:
         """get subset by computed ids
@@ -925,11 +948,22 @@ class GidaV7(Dataset):
             Dataset: a subset from GiDA
         """
         dataset = copy.copy(self)
-        dataset._indices = ids[:num_records]
-        dataset.length = len(dataset._indices)
-
         for k, v in kwargs.items():
             setattr(dataset, k, v)
+        if sampling_strategy == "sequential":
+            dataset._indices = ids[:num_records]
+        elif sampling_strategy == "interval":
+            if num_records is None or len(ids) <= num_records:
+                dataset._indices = ids
+            else:
+                # step size  depends on by #neworks (len(self._roots)) or num_records
+                # step_size = max(1, len(ids) // max(len(self._roots), num_records))
+                step_size = max(1, len(ids) // num_records)
+                tmp_ids = ids[::step_size]
+
+                dataset._indices = tmp_ids[:num_records]
+        dataset.length = len(dataset._indices)
+
         return dataset
 
     def query(
@@ -1054,8 +1088,6 @@ class GidaV7(Dataset):
 
     def get_numpy_array(self, root: Root, key: str, indices: list[tuple[int | None, int | None]]) -> np.ndarray:
         # my_arr has shape (num_scenes,  time_or_one* num_objects)
-        # my_arr: zarr.Array = root.get_array_by_key(key)
-
         my_ds: hfd.Dataset = root.get_array_by_key(key)
 
         optional_scene_ids, optional_time_ids = tuple(map(list, zip(*indices)))
@@ -1142,7 +1174,7 @@ class GidaV7(Dataset):
                 attr = sorted_attrs[i]
                 if has_asterisk and feature.shape[1] < max_dim:
                     if self.verbose:
-                        f"Warning! Attribute {attr} has feature.shape[1]: {feature.shape[1]} >= max dim: {max_dim}! It does not need asterisk sign!"
+                        f"WARN! Attribute {attr} has feature.shape[1]: {feature.shape[1]} >= max dim: {max_dim}! It does not need asterisk sign!"
                     assert isinstance(attr, str)
                     component_i = self.get_component(attr)
                     placeholder_id = selected_placeholder_components.index(component_i)
@@ -1229,6 +1261,10 @@ class GidaV7(Dataset):
         assert counter == batch_size
         return batch  # type:ignore
 
+    def indices(self) -> Sequence:
+        assert self._indices is not None
+        return self._indices
+
     def __getitem__(
         self,
         idx: Union[int, np.integer, IndexType],
@@ -1265,7 +1301,6 @@ class GidaV7(Dataset):
         norm_dim: Optional[int] = 0,
         to_tensor: bool = True,
         num_batches: int = 10,
-        timeseries_as_channel: bool = True,
     ) -> tuple[
         np.ndarray | Tensor,
         np.ndarray | Tensor,
@@ -1273,9 +1308,8 @@ class GidaV7(Dataset):
         np.ndarray | Tensor,
     ]:
         """
-        norm_dim only supports 0 or -1 or None. Otherwise, we cannot concatenate arrays from different-in-size networks </br>
-        `timeseries_as_channel` means we bring time to channel dimension. In such case, we must perform group norm w.r.t. each modality
-        `timeseries_as_channel` does not work with `batch_size_choice` is snapshot (since t= 1 for each modality -> normal channel norm)
+        norm_dim only supports 0 or -1. Otherwise, we cannot concatenate arrays from different-in-size networks </br>
+        if compute, stat tuple with be saved in `self.dataset_log_pt_path` (if non-empty), a .pt file. </br>
         return: (min_val, max_val, mean_val, std_val)
         """
         channel_dim = -1
@@ -1293,7 +1327,7 @@ class GidaV7(Dataset):
             "edge_label": getattr(self._roots[0], "sorted_edge_label_attrs"),
         }
 
-        time_dim = self._roots[0].time_dim  # .attrs["duration"] // self._roots[0].attrs["time_step"]
+        time_dim = self._roots[0].time_dim
         param_attrs = which_array_attrs_map[which_array]
         assert param_attrs is not None and len(param_attrs) > 0, f"ERROR! No found paramattrs from which_array=({which_array}): ({param_attrs})"
         channel_splitters = [
@@ -1305,38 +1339,27 @@ class GidaV7(Dataset):
 
         cat_arrays: list[dac.Array] = []
 
-        batch_indices = np.array_split(self._indices, num_batches)
+        batch_indices = np.array_split(np.arange(len(self.indices())), num_batches)
 
         selected_attr_key = which_array_attr_map[which_array]
         for bids in batch_indices:
-            data_list: list = self.get(bids.tolist())
-            batch = Batch.from_data_list(data_list)
-            batch_att_array: Tensor = getattr(batch, selected_attr_key)
-            if batch_att_array.shape[-1] != sum_channels:
-                are_all_same_as_sum_channels = False
-            dac_arr: dac.Array = dac.from_array(batch_att_array.numpy())
-            cat_arrays.append(dac_arr)
-        ##################################
-        is_norm_dim_different_from_channel_dim: bool = (norm_dim is None or norm_dim != -1) and norm_dim != len(cat_arrays[0].shape) - 1
-        # do_group_norm: bool = is_norm_dim_different_from_channel_dim and are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot"
-        # if is_norm_dim_different_from_channel_dim and not are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot":
-        #     print(
-        #         f"WARN! Networks' arrays do not match their channels. Group norm by channels is prohibited! Flatten norm along {norm_dim} instead!\
-        #         This could change behavior and lead to unwanted statistic!"
-        #     )
-        # is_norm_dim_different_from_channel_dim: bool = (norm_dim is None or norm_dim != -1) and norm_dim != len(cat_arrays[0].shape) - 1
+            bids_list = bids.tolist()
+            if bids_list:
+                data_list: list = self.get(bids_list)
+                batch = Batch.from_data_list(data_list)
+                batch_att_array: Tensor = getattr(batch, selected_attr_key)
+                if batch_att_array.shape[-1] != sum_channels:
+                    are_all_same_as_sum_channels = False
+                dac_arr: dac.Array = dac.from_array(batch_att_array.numpy())
+                cat_arrays.append(dac_arr)
 
-        ##################################
-        do_group_norm: bool = (
-            is_norm_dim_different_from_channel_dim and are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot" and timeseries_as_channel
-        )
+        is_norm_dim_different_from_channel_dim: bool = norm_dim != -1 and norm_dim != len(cat_arrays[0].shape) - 1
+        do_group_norm: bool = is_norm_dim_different_from_channel_dim and are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot"
         if is_norm_dim_different_from_channel_dim and not are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot":
             print(
                 f"WARN! Networks' arrays do not match their channels. Group norm by channels is prohibited! Flatten norm along {norm_dim} instead!\
                 This could change behavior and lead to unwanted statistic!"
             )
-
-        ##################################
 
         for i in range(len(cat_arrays)):
             arr = cat_arrays[i]
@@ -1352,6 +1375,7 @@ class GidaV7(Dataset):
                 num_channels = channel_splitters[i]
                 t = flatten_array[:, current_idx : current_idx + num_channels]
 
+                # t = t.flatten()
                 current_idx += num_channels
 
                 t_std_val, t_mean_val = t.std(axis=norm_dim), t.mean(axis=norm_dim)
