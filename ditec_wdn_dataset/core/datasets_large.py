@@ -548,7 +548,7 @@ class GidaV6(Dataset):
                     relative_scene_ids = relative_scene_ids[:num_samples_per_network]
                     num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
                 else:
-                    num_samples = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    num_samples = root.compute_first_size() #if self.num_records is None else min(self.num_records, root.compute_first_size())
                     relative_scene_ids = np.arange(num_samples)
                 tuples = (relative_scene_ids, None)
             elif self.batch_axis_choice == "temporal":
@@ -571,7 +571,7 @@ class GidaV6(Dataset):
                     relative_time_ids = relative_time_ids[:num_samples_per_network]
                     num_samples = len(relative_scene_ids)
                 else:
-                    num_scenes = root.compute_first_size() if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    num_scenes = root.compute_first_size() #if self.num_records is None else min(self.num_records, root.compute_first_size())
                     time_dim = root.time_dim
                     relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
                     relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
