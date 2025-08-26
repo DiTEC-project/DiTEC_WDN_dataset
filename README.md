@@ -17,6 +17,7 @@ Access the wiki at [https://ditec-project.github.io/DiTEC_WDN_dataset](https://d
 ```
     |-- arguments   - where configs stored
     |-- core        - code for interface, demand generator, simgen
+    |-- inputs      - contains original INP files
     |-- opt         - code for PSO
     |-- utils       - where we access utils functions
     |-- vis         - code for visualization
