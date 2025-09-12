@@ -489,76 +489,76 @@ class GidaV7(Dataset):
         train_ids, val_ids, test_ids = [], [], []
         len_of_list = len(self._num_samples_per_network_list)
         # if not split per network or existing a single network only, we split based on flatten ids
-        if not self.split_per_network or len_of_list == 1:
-            left = int(self.length * split_ratios[0])
-            right = int(left + self.length * split_ratios[1])
+        # if not self.split_per_network or len_of_list == 1:
+        #     left = int(self.length * split_ratios[0])
+        #     right = int(left + self.length * split_ratios[1])
 
-            flatten_ids = np.asarray(list(self._index_map.keys()))
+        #     flatten_ids = np.asarray(list(self._index_map.keys()))
 
-            flatten_ids = flatten_ids.tolist()
-            train_ids = flatten_ids[:left]
-            val_ids = flatten_ids[left:right]
-            test_ids = flatten_ids[right:]
+        #     flatten_ids = flatten_ids.tolist()
+        #     train_ids = flatten_ids[:left]
+        #     val_ids = flatten_ids[left:right]
+        #     test_ids = flatten_ids[right:]
+        #     if self.split_fixed:
+        #         selected_trains = int(num_samples * split_ratios[0])
+        #         selected_vals = int(num_samples * split_ratios[1])
+        #         selected_test = num_samples - selected_trains - selected_vals
+
+        #         train_ids = train_ids[:selected_trains]
+        #         val_ids = val_ids[:selected_vals]
+        #         test_ids = test_ids[:selected_test]
+        # else:
+        # to split per network, we compute train/val/test individually
+        # degree of freedom will be (len_of_list - 1)
+        expected_train_samples = int(self.length * split_ratios[0])
+        expected_valid_samples = int(self.length * split_ratios[1])
+        expected_test_samples = self.length - expected_train_samples - expected_valid_samples
+        flatten_ids = np.asarray(list(self._index_map.keys()))
+
+        num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
+        current_nid = 0
+        for i, network_num_samples in enumerate(self._num_samples_per_network_list):
+            network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
+
+            if self.batch_axis_choice == "snapshot":
+                # with snapshots, we still split by scence to ensure the scenario independence
+                # f_0-> (n_0, t_0), f_1 -> (n_0, t_1), ..., f_T -> (n_0, t_T), f_T+1 -> (n_1, t_0), ...
+                time_dim = self._roots[i].time_dim
+                num_scenes = len(network_flatten_ids) // time_dim
+                left = int(num_scenes * split_ratios[0])
+                right = int(left + num_scenes * split_ratios[1])
+
+                left = left * time_dim
+                right = right * time_dim
+
+                network_train_ids = network_flatten_ids[:left]
+                network_val_ids = network_flatten_ids[left:right]
+                network_test_ids = network_flatten_ids[right:]
+
+            else:
+                left = int(network_num_samples * split_ratios[0])
+                right = int(left + network_num_samples * split_ratios[1])
+                network_train_ids = network_flatten_ids[:left]
+                network_val_ids = network_flatten_ids[left:right]
+                network_test_ids = network_flatten_ids[right:]
+
+            if i == len_of_list - 1:
+                network_train_ids = network_train_ids[: expected_train_samples - len(train_ids)]
+                network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
+                network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
+
             if self.split_fixed:
-                selected_trains = int(num_samples * split_ratios[0])
-                selected_vals = int(num_samples * split_ratios[1])
-                selected_test = num_samples - selected_trains - selected_vals
+                selected_trains = int(num_samples_per_network * split_ratios[0])
+                selected_vals = int(num_samples_per_network * split_ratios[1])
+                selected_test = num_samples_per_network - selected_trains - selected_vals
+                network_train_ids = network_train_ids[:selected_trains]
+                network_val_ids = network_val_ids[:selected_vals]
+                network_test_ids = network_test_ids[:selected_test]
 
-                train_ids = train_ids[:selected_trains]
-                val_ids = val_ids[:selected_vals]
-                test_ids = test_ids[:selected_test]
-        else:
-            # to split per network, we compute train/val/test individually
-            # degree of freedom will be (len_of_list - 1)
-            expected_train_samples = int(self.length * split_ratios[0])
-            expected_valid_samples = int(self.length * split_ratios[1])
-            expected_test_samples = self.length - expected_train_samples - expected_valid_samples
-            flatten_ids = np.asarray(list(self._index_map.keys()))
-
-            num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
-            current_nid = 0
-            for i, network_num_samples in enumerate(self._num_samples_per_network_list):
-                network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
-
-                if self.batch_axis_choice == "snapshot":
-                    # with snapshots, we still split by scence to ensure the scenario independence
-                    # f_0-> (n_0, t_0), f_1 -> (n_0, t_1), ..., f_T -> (n_0, t_T), f_T+1 -> (n_1, t_0), ...
-                    time_dim = self._roots[i].time_dim
-                    num_scenes = len(network_flatten_ids) // time_dim
-                    left = int(num_scenes * split_ratios[0])
-                    right = int(left + num_scenes * split_ratios[1])
-
-                    left = left * time_dim
-                    right = right * time_dim
-
-                    network_train_ids = network_flatten_ids[:left]
-                    network_val_ids = network_flatten_ids[left:right]
-                    network_test_ids = network_flatten_ids[right:]
-
-                else:
-                    left = int(network_num_samples * split_ratios[0])
-                    right = int(left + network_num_samples * split_ratios[1])
-                    network_train_ids = network_flatten_ids[:left]
-                    network_val_ids = network_flatten_ids[left:right]
-                    network_test_ids = network_flatten_ids[right:]
-
-                if i == len_of_list - 1:
-                    network_train_ids = network_train_ids[: expected_train_samples - len(train_ids)]
-                    network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
-                    network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
-
-                if self.split_fixed:
-                    selected_trains = int(num_samples_per_network * split_ratios[0])
-                    selected_vals = int(num_samples_per_network * split_ratios[1])
-                    selected_test = num_samples_per_network - selected_trains - selected_vals
-                    network_train_ids = network_train_ids[:selected_trains]
-                    network_val_ids = network_val_ids[:selected_vals]
-                    network_test_ids = network_test_ids[:selected_test]
-
-                train_ids.extend(network_train_ids.tolist())
-                val_ids.extend(network_val_ids.tolist())
-                test_ids.extend(network_test_ids.tolist())
-                current_nid += network_num_samples
+            train_ids.extend(network_train_ids.tolist())
+            val_ids.extend(network_val_ids.tolist())
+            test_ids.extend(network_test_ids.tolist())
+            current_nid += network_num_samples
 
         return train_ids, val_ids, test_ids
 
@@ -589,7 +589,7 @@ class GidaV7(Dataset):
                     relative_scene_ids = relative_scene_ids[:num_samples_per_network]
                     num_samples = len(relative_scene_ids)  # min(num_samples_per_network, root_sizes[network_index])
                 else:
-                    num_samples = root.compute_first_size() #if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    num_samples = root.compute_first_size()  # if self.num_records is None else min(self.num_records, root.compute_first_size())
                     relative_scene_ids = np.arange(num_samples)
                 tuples = (relative_scene_ids, None)
             elif self.batch_axis_choice == "temporal":
@@ -612,7 +612,7 @@ class GidaV7(Dataset):
                     relative_time_ids = relative_time_ids[:num_samples_per_network]
                     num_samples = len(relative_scene_ids)
                 else:
-                    num_scenes = root.compute_first_size() #if self.num_records is None else min(self.num_records, root.compute_first_size())
+                    num_scenes = root.compute_first_size()  # if self.num_records is None else min(self.num_records, root.compute_first_size())
                     time_dim = root.time_dim
                     relative_scene_ids = np.arange(num_scenes).repeat(time_dim)  # .reshape([-1, 1])
                     relative_time_ids = np.tile(np.arange(time_dim), reps=num_scenes)  # .reshape([-1, 1])
