@@ -1162,10 +1162,18 @@ class GidaV7(Dataset):
 
             merging_arrs.append(my_arr)
 
-        if max_dim == -1:  # no non-asterisk attr
-            max_dim = sum(a.shape[1] for a in merging_arrs)
-
         required_padding = any(has_asterisks)
+
+        if max_dim == -1:  # no non-asterisk attr
+            if required_padding:
+                # max_dim hasn't been found but still require padding => we are in label/ edge-label cases and required shape from previous node/edge cases
+                if is_node:
+                    max_dim = root.node_mask.shape[0] if root.node_mask is not None else -1
+                else:
+                    max_dim = root.edge_mask.shape[0] if root.edge_mask is not None else -1
+            # double-check to prevent in case that node(edge)mask are unavailable for any reason
+            if max_dim == -1:  # otherwise, max dim is the sum of all available dims
+                max_dim = sum(a.shape[1] for a in merging_arrs)
 
         if required_padding:
             for i in range(len(merging_arrs)):
