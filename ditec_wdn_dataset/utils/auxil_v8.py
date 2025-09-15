@@ -7,9 +7,10 @@
 #
 
 import os
-import wntr
 from dataclasses import fields
+import wntr.network as wntrn
 import wntr.network.elements as wntre
+from wntr.sim import SimulationResults
 from typing import Callable, Generator, Literal, Tuple, Union, Any, Optional, Type, Mapping
 import pandas as pd
 from copy import deepcopy
@@ -34,7 +35,6 @@ from sys import stdout
 from ditec_wdn_dataset.utils.configs import (
     SimConfig,
     TuneConfig,
-    Strategy,
     JunctionTuneConfig,
     TankTuneConfig,
     ReservoirTuneConfig,
@@ -174,7 +174,7 @@ def list_all_simulation_parameters(inp_paths: list[str], verbose: bool = True, w
     link_dict = {}
     for inp_path in inp_paths:
         try:
-            wn = wntr.network.WaterNetworkModel(inp_file_name=inp_path)
+            wn = wntrn.WaterNetworkModel(inp_file_name=inp_path)
             for _, node in wn.nodes():
                 param_dict = _get_params_and_wrapped_fn_on_value(node, wrapped_value_fn)
                 node_dict.update(param_dict)
@@ -197,7 +197,7 @@ def list_all_simulation_parameters(inp_paths: list[str], verbose: bool = True, w
 
 
 def get_sim_output_df_from_result(
-    result: wntr.sim.SimulationResults,
+    result: SimulationResults,
     sim_output: Literal["pressure", "head", "demand", "flowrate", "velocity", "headloss", "friction_factor"],
 ) -> pd.DataFrame:
     if sim_output in ["pressure", "head", "demand"]:
@@ -209,7 +209,7 @@ def get_sim_output_df_from_result(
 
 
 def aggregate_simulated_output(
-    result: wntr.sim.SimulationResults,
+    result: SimulationResults,
     sim_output: Literal["pressure", "head", "demand", "flowrate", "velocity", "headloss", "friction_factor"],
     aggr: Literal["mean", "max", "min", None],
     axis: int = 0,
@@ -237,16 +237,16 @@ def remove_all_demand(obj: wntre.Junction, default_pattern_name: str):
 
 
 def init_water_network(
-    wn: wntr.network.WaterNetworkModel,
+    wn: wntrn.WaterNetworkModel,
     duration: int,
     time_step: int,
     remove_controls: bool = True,
     remove_patterns: bool = True,
     remove_curve: bool = True,
-) -> wntr.network.WaterNetworkModel:
+) -> wntrn.WaterNetworkModel:
     """sanitize unused things and correct time settings.
     Args:
-        wn (wntr.network.WaterNetworkModel): water network model
+        wn (wntrn.WaterNetworkModel): water network model
         duration (int): time duration (hours)
         time_step (int): time step (hours)
         remove_controls (bool, optional): flag indicates whether we remove all control rules in INP when loaded. Defaults to True.
@@ -254,7 +254,7 @@ def init_water_network(
         remove_curve (bool, optional): flag indicates whether we remove all curves in INP when loaded.  Defaults to True.
 
     Returns:
-        wntr.network.WaterNetworkModel: sanitized water network model
+        wntrn.WaterNetworkModel: sanitized water network model
     """
     time_dim = 1 if duration <= 1 else duration
 
@@ -317,7 +317,7 @@ def prepare_sen_records(
     param: str,
     is_node_param: bool,
     value_list: list[float],
-    wn: wntr.network.WaterNetworkModel,
+    wn: wntrn.WaterNetworkModel,
     alter_strategy: Literal["add", "replace"] = "replace",
     default_value: float = 0,
 ):
@@ -375,7 +375,7 @@ def select_enum_value(cur_val: int | float | np.ndarray, my_enum: IntEnum) -> in
 
 def assign_value2(
     record: np.ndarray,
-    inplaced_wn: wntr.network.WaterNetworkModel,
+    inplaced_wn: wntrn.WaterNetworkModel,
     node_params: list,
     link_params: list,
     forced_value: Any | None = None,
@@ -431,7 +431,7 @@ def get_dtype_by_param_name(param_name: str) -> Type:
 
 
 def create_pattern(
-    inplaced_wn: wntr.network.WaterNetworkModel,
+    inplaced_wn: wntrn.WaterNetworkModel,
     obj: Any,
     value: np.ndarray | float | int | list,
 ) -> str:
@@ -454,7 +454,7 @@ def create_pattern(
 
 
 def create_curve(
-    inplaced_wn: wntr.network.WaterNetworkModel,
+    inplaced_wn: wntrn.WaterNetworkModel,
     obj: Any,
     curve_type: Literal["HEAD", "HEADLOSS", "VOLUME", "EFFICIENCY"],
     value: np.ndarray | float | list,
@@ -490,7 +490,7 @@ def create_curve(
 
 def assign_value3(
     record: np.ndarray,
-    inplaced_wn: wntr.network.WaterNetworkModel,
+    inplaced_wn: wntrn.WaterNetworkModel,
     node_params: list,
     link_params: list,
     forced_value: Any | None = None,
@@ -609,7 +609,7 @@ def assign_value3(
                     value = True if value >= 0.5 else False
             elif dtype == IntEnum or dtype == Enum:
                 if param_name == "initial_status":
-                    my_enum = wntr.network.LinkStatus
+                    my_enum = wntrn.LinkStatus
                 else:
                     raise NotImplementedError()
                 unique_enum_values = set([e.value for n, e in my_enum._member_map_.items()])  # type:ignore
@@ -1110,7 +1110,7 @@ def rechunk_zarr(
     return new_zip_paths
 
 
-def get_adj_list(wn: wntr.network.WaterNetworkModel, skip_node_names: list[str] = []) -> list[tuple[str, str, str]]:
+def get_adj_list(wn: wntrn.WaterNetworkModel, skip_node_names: list[str] = []) -> list[tuple[str, str, str]]:
     # ref :  https://github.com/DiTEC-project/gnn-pressure-estimation/blob/main/utils/DataLoader.py
     # graph : nx.Graph = nx.Graph(wn.to_graph()).to_undirected()
     graph: nx.Graph = wn.to_graph().to_undirected()
@@ -1120,7 +1120,7 @@ def get_adj_list(wn: wntr.network.WaterNetworkModel, skip_node_names: list[str] 
     return list(graph.edges(keys=True))
 
 
-def get_object_name_list_by_component(component: str, wn: wntr.network.WaterNetworkModel) -> list[str]:
+def get_object_name_list_by_component(component: str, wn: wntrn.WaterNetworkModel) -> list[str]:
     component = component.lower()
     if component == "junction":
         return wn.junction_name_list
@@ -1293,7 +1293,7 @@ def get_curve_points(
         if check_valid_curve(curve):
             my_curve: wntre.Curve = curve  # type:ignore
         else:
-            curve_registry: wntr.network.model.CurveRegistry = obj._curve_reg
+            curve_registry: wntrn.model.CurveRegistry = obj._curve_reg
             my_curve: wntre.Curve = curve_registry._data[curve_name]
 
         return my_curve.points
@@ -1309,7 +1309,7 @@ def convert_to_float_array(value: Any) -> np.ndarray:
     return new_array.flatten()
 
 
-def get_default_value_from_global(param_name: str, wn: wntr.network.WaterNetworkModel) -> Optional[float]:
+def get_default_value_from_global(param_name: str, wn: wntrn.WaterNetworkModel) -> Optional[float]:
     if hasattr(wn.options.hydraulic, param_name):
         return getattr(wn.options.hydraulic, param_name)
     else:
@@ -1317,7 +1317,7 @@ def get_default_value_from_global(param_name: str, wn: wntr.network.WaterNetwork
         return None
 
 
-def get_total_dimensions(config: SimConfig, wn: wntr.network.WaterNetworkModel) -> tuple:
+def get_total_dimensions(config: SimConfig, wn: wntrn.WaterNetworkModel) -> tuple:
     def get_dim(tune_dataclass: Any, num_components: int):
         return sum([("strategy" in k and v is None or v != "keep") for k, v in vars(tune_dataclass).items()]) * num_components
 
@@ -1356,7 +1356,7 @@ def get_total_dimensions(config: SimConfig, wn: wntr.network.WaterNetworkModel) 
 
 def get_object_dict_by_config(
     tune_config: TuneConfig,
-    wn: wntr.network.WaterNetworkModel,
+    wn: wntrn.WaterNetworkModel,
 ) -> Generator[tuple, Any, None]:
     if isinstance(tune_config, JunctionTuneConfig):
         return wn.junctions()
@@ -1388,7 +1388,7 @@ def get_object_dict_by_config(
 
 def get_object_name_list_by_config(
     tune_config: TuneConfig,
-    wn: wntr.network.WaterNetworkModel,
+    wn: wntrn.WaterNetworkModel,
 ) -> list[str]:
     if isinstance(tune_config, JunctionTuneConfig):
         return wn.junction_name_list
@@ -1418,13 +1418,13 @@ def get_object_name_list_by_config(
         raise NotImplementedError()
 
 
-def save_inp_file(save_inp_path: str, wn: wntr.network.WaterNetworkModel, save_name: str) -> None:
+def save_inp_file(save_inp_path: str, wn: wntrn.WaterNetworkModel, save_name: str) -> None:
     assert save_name[-4:] == ".inp"
     network_name = os.path.basename(wn.name).split(".")[0] if wn.name is not None else "test"
     # postfix = datetime.today().strftime('%Y%m%d_%H%M')
     filename = rf"{save_inp_path}/{network_name}_{save_name}"
     try:
-        wntr.network.write_inpfile(wn, filename=filename, units=get_flow_units(wn))
+        wntrn.write_inpfile(wn, filename=filename, units=get_flow_units(wn))
 
     except OSError as e:
         print(f"WARNING! Error in saving succ inp, filename = {filename}. Error: {e}")
@@ -1462,7 +1462,7 @@ def list_all_simulated_parameters(config: SimConfig) -> dict[str, list[str]]:
     return selected_params_dict
 
 
-def get_edge_index(wn: wntr.network.WaterNetworkModel, skip_node_names: list[str] = []) -> np.ndarray:
+def get_edge_index(wn: wntrn.WaterNetworkModel, skip_node_names: list[str] = []) -> np.ndarray:
     # Adapted from :
     # (1) https://pytorch-geometric.readthedocs.io/en/latest/_modules/torch_geometric/utils/convert.html
     # (2) https://github.com/DiTEC-project/gnn-pressure-estimation/blob/main/utils/DataLoader.py
@@ -1477,7 +1477,7 @@ def get_edge_index(wn: wntr.network.WaterNetworkModel, skip_node_names: list[str
     return edge_index
 
 
-def get_onames(actual_okeys: OrderedDict, wn: wntr.network.WaterNetworkModel) -> OrderedDict:
+def get_onames(actual_okeys: OrderedDict, wn: wntrn.WaterNetworkModel) -> OrderedDict:
     onames = OrderedDict()
     node_names, link_names = [], []
     for component in actual_okeys:
@@ -1558,12 +1558,21 @@ def root2config(root_attrs: dict | Mapping) -> SimConfig:
     return config
 
 
-def pretty_print(my_dict: dict[str, Any], indent: int = 20) -> None:
-    for k, v in my_dict.items():
-        if isinstance(v, dict):
-            pretty_print(my_dict=v, indent=indent)
-        else:
-            print(f"{k:<{indent}}:\t{str(v):}\n")
+def pretty_print(my_dict: dict[str, Any], indent: int = 4) -> None:
+    def custom_serializer(obj):
+        """Handle unserializable objects like datetime, set, etc."""
+        if isinstance(obj, set):
+            return list(obj)  # convert sets to lists
+        if isinstance(obj, AbstractConfig):
+            return obj.as_dict()
+        return str(obj)  # fallback: Convert unknown objects to strings
+
+    print(json.dumps(my_dict, indent=indent, sort_keys=True, default=custom_serializer))
+    # for k, v in my_dict.items():
+    #     if isinstance(v, dict):
+    #         pretty_print(my_dict=v, indent=indent*2)
+    #     else:
+    #         print(f"{k:<{indent}}:\t{str(v):}\n")
 
 
 def shuffle_list(my_list: list) -> tuple[list, list]:
