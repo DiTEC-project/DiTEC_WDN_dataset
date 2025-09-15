@@ -277,12 +277,14 @@ class GidaV7(Dataset):
         def compute_first_size(self) -> int:
             if len(self.sorted_node_attrs) <= 0:
                 return 0
-            num_samples = self.root.num_rows
-            if isinstance(num_samples, dict):
-                total_samples = sum(num_samples.values())
-                return total_samples
-            else:
-                return num_samples
+            # num_samples = self.root.num_rows
+            # if isinstance(num_samples, dict):
+            #     total_samples = sum(num_samples.values())
+            #     return total_samples
+            # else:
+            #     return num_samples
+
+            return self.attrs["num_samples"]
 
     def __init__(
         self,

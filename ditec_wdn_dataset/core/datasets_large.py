@@ -171,6 +171,8 @@ class GidaV6(Dataset):
             my_zarr = self.get_array_by_key(node_attr)
             num_samples = my_zarr.shape[0]
             assert num_samples is not None and isinstance(num_samples, int)
+            if num_samples != self.attrs["num_samples"]:
+                print(f"WARN! The number of samples ({num_samples}) does not match the #samples ({self.attrs['num_samples']}) recorded in metadata ")
             return num_samples
 
     def __init__(
