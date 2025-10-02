@@ -10,7 +10,7 @@ import glob
 from itertools import compress
 import json
 import os
-from typing import Any, Iterator, Literal, Optional, Sequence, Union
+from typing import Any, Iterator, Literal, Optional, Sequence, Tuple, Union
 import zipfile
 import numpy as np
 import torch
@@ -171,9 +171,19 @@ class GidaV6(Dataset):
             my_zarr = self.get_array_by_key(node_attr)
             num_samples = my_zarr.shape[0]
             assert num_samples is not None and isinstance(num_samples, int)
-            if num_samples != self.attrs["num_samples"]:
-                print(f"WARN! The number of samples ({num_samples}) does not match the #samples ({self.attrs['num_samples']}) recorded in metadata ")
             return num_samples
+
+        def compute_num_chunks(self) -> int:
+            if isinstance(self.root, dict):
+                return 1
+            else:
+                if len(self.sorted_node_attrs) <= 0:
+                    return 0
+                node_attr = self.sorted_node_attrs[0]
+                if isinstance(node_attr, tuple):
+                    node_attr = node_attr[0]
+                my_zarr = self.get_array_by_key(node_attr)
+                return my_zarr.nchunks
 
     def __init__(
         self,
@@ -284,7 +294,7 @@ class GidaV6(Dataset):
 
     def custom_process(self) -> None:
         # load arrays from zip file (and input_paths)
-        self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(
+        self.length, self._index_map, self._network_map, self._chunk_map, self._num_samples_per_network_list = self.compute_indices(
             zip_file_paths=self.zip_file_paths,
             input_paths=self.input_paths,
         )
@@ -299,6 +309,62 @@ class GidaV6(Dataset):
         else:
             assert self._index_map is not None and len(self._index_map) > 0
             self._indices = list(self._index_map.keys())
+
+    def _shuffle_internal(self, my_ids: list[int] | np.ndarray, return_perm: bool = False) -> list[int] | Tuple[list[int], list[int]]:
+        # np-ize the ids
+        if not isinstance(my_ids, np.ndarray):
+            my_indices = np.asarray(my_ids)
+        else:
+            my_indices = my_ids
+        # retrieve chunk_ids regardless of networks
+        chunk_ids = [self._chunk_map[idx] for idx in my_indices]
+        chunk_ids = np.asarray(chunk_ids)
+        # group up indices by chunk id
+        chunk_groups: dict[int, np.ndarray] = {c: my_indices[chunk_ids == c] for c in np.unique(chunk_ids)}
+        # inter-shuffle
+        perm = [np.random.permutation(chunk_indices.shape[0]) for chunk_indices in chunk_groups.values()]
+        chunk_groups = {c: chunk_indices[perm[i]] for i, (c, chunk_indices) in enumerate(chunk_groups.items())}
+        # intra-shuffle and merge
+        cs = np.random.permutation(np.array(list(chunk_groups.keys()))).tolist()
+        my_indices = [chunk_groups[c] for c in cs]
+        my_indices = np.concatenate(my_indices, axis=0).flatten().tolist()
+
+        if return_perm:
+            perm = np.concatenate(perm).flatten().tolist()
+            return my_indices, perm
+        else:
+            return my_indices
+
+    def shuffle(
+        self,
+        return_perm: bool = False,
+    ) -> Dataset | Tuple[Dataset, torch.Tensor]:  # Union["Dataset", Tuple["Dataset", torch.Tensor]]:
+        r"""Randomly shuffles by chunks
+        Note that in multi-network setting, we wish to maintain the diversity\
+        so randomly select chunks whose `chunk_id` are the same but different networks is legal.
+        This leads to the omission of `network_id` when shuffling.
+
+        Args:
+            return_perm (bool, optional): If set to :obj:`True`, will also
+                return the random permutation used to shuffle the dataset.
+                (default: :obj:`False`)
+        """
+        assert self._indices is not None, r"ERROR! self._indices should be not None!"
+
+        tup = self._shuffle_internal(self._indices, return_perm)  # type:ignore
+        if return_perm:
+            my_indices, perm = tup
+            # assign new indices to self._indices
+            dataset = copy.copy(self)
+            dataset._indices = my_indices  # type: ignore
+            perm = torch.as_tensor(perm)
+            return (dataset, perm)
+        else:
+            my_indices = tup
+            # assign new indices to self._indices
+            dataset = copy.copy(self)
+            dataset._indices = my_indices
+            return dataset
 
     def _internal_subset_shuffle(
         self, sampling_strategy: Literal["default", "random"] = "default"
@@ -356,32 +422,35 @@ class GidaV6(Dataset):
             raise NotImplementedError
 
     def process_subset_shuffle(self, custom_subset_shuffle_pt_path: str = "", create_and_save_to_dataset_log_if_nonexist: bool = True):
-        if self.subset_shuffle:
-            if custom_subset_shuffle_pt_path != "":
-                self._load_shuffle_indices_from_disk_internal(path=custom_subset_shuffle_pt_path, sanity_check=True)
-            else:
-                # we first check whether the pt file exists. If yes, we load train/val/test ids
-                if not self.load_shuffle_indices_from_disk(sanity_check=True):
-                    # otherwise, we perform shuffle and store ids in a saving folder
+        print('WARN! This function is obsolute! When you want to random a subset (e.g., train_set), just use "train_set.shuffle()"')
+        print("Note! We do not save the shuffle indices anymore!")
+        return
+        # if self.subset_shuffle:
+        #     if custom_subset_shuffle_pt_path != "":
+        #         self._load_shuffle_indices_from_disk_internal(path=custom_subset_shuffle_pt_path, sanity_check=True)
+        #     else:
+        #         # we first check whether the pt file exists. If yes, we load train/val/test ids
+        #         if not self.load_shuffle_indices_from_disk(sanity_check=True):
+        #             # otherwise, we perform shuffle and store ids in a saving folder
 
-                    new_train_ids, new_val_ids, new_test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids = self._internal_subset_shuffle(
-                        sampling_strategy="default"
-                    )
+        #             new_train_ids, new_val_ids, new_test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids = self._internal_subset_shuffle(
+        #                 sampling_strategy="default"
+        #             )
 
-                    if self.dataset_log_pt_path != "" and create_and_save_to_dataset_log_if_nonexist:
-                        self.save_shuffle_indices_to_disk(
-                            self.train_ids, self.val_ids, self.test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids
-                        )
-                    else:
-                        print(
-                            "WARN! Subset shuffle indices cannot be saved as `dataset_log_pt_path` is empty or `do_save_to_dataset_log` is set to False in Gida Interface! You cannot re-load these ids in the inference or next train!",  # noqa: E501
-                            flush=True,
-                        )
+        #             if self.dataset_log_pt_path != "" and create_and_save_to_dataset_log_if_nonexist:
+        #                 self.save_shuffle_indices_to_disk(
+        #                     self.train_ids, self.val_ids, self.test_ids, train_shuffle_ids, val_shuffle_ids, test_shuffle_ids
+        #                 )
+        #             else:
+        #                 print(
+        #                     "WARN! Subset shuffle indices cannot be saved as `dataset_log_pt_path` is empty or `do_save_to_dataset_log` is set to False in Gida Interface! You cannot re-load these ids in the inference or next train!",  # noqa: E501
+        #                     flush=True,
+        #                 )
 
-                    self.train_ids = new_train_ids
-                    self.val_ids = new_val_ids
-                    self.test_ids = new_test_ids
-            self.update_indices()
+        #             self.train_ids = new_train_ids
+        #             self.val_ids = new_val_ids
+        #             self.test_ids = new_test_ids
+        #     self.update_indices()
 
     def save_shuffle_indices_to_disk(
         self,
@@ -441,26 +510,13 @@ class GidaV6(Dataset):
     def compute_subset_ids_by_ratio(self, split_ratios: tuple[float, float, float], num_samples: int) -> tuple[list[int], list[int], list[int]]:
         train_ids, val_ids, test_ids = [], [], []
         len_of_list = len(self._num_samples_per_network_list)
-        # if not split per network or existing a single network only, we split based on flatten ids
-        # if not self.split_per_network or len_of_list == 1:
-        #     left = int(self.length * split_ratios[0])
-        #     right = int(left + self.length * split_ratios[1])
 
-        #     flatten_ids = np.asarray(list(self._index_map.keys()))
-
-        #     flatten_ids = flatten_ids.tolist()
-        #     train_ids = flatten_ids[:left]
-        #     val_ids = flatten_ids[left:right]
-        #     test_ids = flatten_ids[right:]
-        # else:
-        # to split per network, we compute train/val/test individually
-        # degree of freedom will be (len_of_list - 1)
         expected_train_samples = int(self.length * split_ratios[0])
         expected_valid_samples = int(self.length * split_ratios[1])
         expected_test_samples = self.length - expected_train_samples - expected_valid_samples
         flatten_ids = np.asarray(list(self._index_map.keys()))
 
-        num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
+        # num_samples_per_network = num_samples // len(self._num_samples_per_network_list)
         current_nid = 0
         for i, network_num_samples in enumerate(self._num_samples_per_network_list):
             network_flatten_ids = flatten_ids[current_nid : current_nid + network_num_samples]
@@ -492,22 +548,71 @@ class GidaV6(Dataset):
                 network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
                 network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
 
-            train_ids.extend(network_train_ids.tolist())
-            val_ids.extend(network_val_ids.tolist())
-            test_ids.extend(network_test_ids.tolist())
+            # if self.subset_shuffle:
+            #     if self.batch_axis_choice == "temporal":
+            #         # print(
+            #         #     "WARN! Subset shuffle is on, but in the case of temporal, it is impossible to balance shuffling and chunk processing time"
+            #         #     "user should reduce the batch_size to limit the number of loading chunks per iteration! Gida will do a normal shuffling!"
+            #         # )
+            #         network_train_ids = network_train_ids[np.random.permutation(network_train_ids.shape[0])]
+            #         network_val_ids = network_val_ids[np.random.permutation(network_val_ids.shape[0])]
+            #         network_test_ids = network_test_ids[np.random.permutation(network_test_ids.shape[0])]
+            #     else:
+            #         root = self._roots[i]
+            #         num_chunks: int = root.compute_num_chunks()
+            #         assert num_samples % num_chunks == 0, (
+            #             f"ERROR! subset_shuffle is on but unable to shuffle when the ratio between num_samples({num_samples}) and num_chunks({num_chunks}) is odd"
+            #         )
+            #         network_train_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_train_ids)
+            #         network_val_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_val_ids)
+            #         network_test_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_test_ids)
+
+            network_train_ids = network_train_ids.tolist()
+            network_val_ids = network_val_ids.tolist()
+            network_test_ids = network_test_ids.tolist()
+
+            if self.subset_shuffle:
+                network_train_ids = self._shuffle_internal(my_ids=network_train_ids)
+                network_val_ids = self._shuffle_internal(my_ids=network_val_ids)
+                network_test_ids = self._shuffle_internal(my_ids=network_test_ids)
+
+            train_ids.extend(network_train_ids)
+            val_ids.extend(network_val_ids)
+            test_ids.extend(network_test_ids)
             current_nid += network_num_samples
 
         return train_ids, val_ids, test_ids
 
+    # def _shuffle_by_chunk(self, num_chunks: int, my_ids: np.ndarray) -> np.ndarray:
+    #     my_ids = my_ids.reshape([num_chunks, -1])
+    #     # we shuffle columns
+    #     permuted_indices = np.argsort(np.random.rand(*my_ids.shape), axis=1)
+    #     my_ids = np.take_along_axis(my_ids, permuted_indices, axis=1)
+    #     # then, we shuffle the chunks
+    #     my_ids = my_ids[np.random.permutation(num_chunks)]
+    #     # flatten back
+    #     my_ids = my_ids.flatten()
+    #     return my_ids
+
     def compute_indices(
         self, zip_file_paths: list[str], input_paths: list[str] = []
-    ) -> tuple[int, dict[int, tuple[int | None, int | None]], dict[int, int], list[int]]:
+    ) -> tuple[int, dict[int, tuple[int | None, int | None]], dict[int, int], dict[int, int], list[int]]:
         # this is must-have since the size of networks is different.
-        index_map: dict[int, tuple[int | None, int | None]] = {}
-        network_map: dict[int, int] = {}
+        # index_map maps flatten_id to a tuple of [scene_id, time_id]. The values of tuple are optional, but one should be non-None.
+        index_map: dict[int, tuple[int | None, int | None]] = OrderedDict()
+        # network_map maps flatten_id to network_id
+        network_map: dict[int, int] = OrderedDict()
+        # chunk_map maps flatten_id to chunk_id => for shuffling and accelerate IO time
+        chunk_map: dict[int, int] = OrderedDict()
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
         self.load_roots(zip_file_paths, input_paths)
+
+        if self.batch_axis_choice in ["scene", "temporal"]:
+            time_dims = [r.time_dim for r in self._roots]
+            assert sum(time_dims) / len(time_dims) == time_dims[0], (
+                f"ERROR! Simulation time (duration) must be equal in option batch_axis_choice <{self.batch_axis_choice}>, but get {time_dims}!"
+            )
 
         # root_sizes: list[int] = [r.compute_first_size() for r in self._roots]
         # if self.batch_axis_choice == "scene":
@@ -516,6 +621,8 @@ class GidaV6(Dataset):
         #     sum_of_root_sizes = sum([r.time_dim for r in self._roots])
         # else:  # snapshot
         #     sum_of_root_sizes = sum([r.time_dim * root_sizes[i] for i, r in enumerate(self._roots)])
+        # total_num_samples: int = sum_of_root_sizes  # if self.num_records is None else min(sum_of_root_sizes, self.num_records)
+        # num_samples_per_network = total_num_samples // len(self._roots)
 
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
@@ -527,7 +634,6 @@ class GidaV6(Dataset):
                 num_samples = root.time_dim
                 relative_time_ids = np.arange(num_samples)
                 tuples = (None, relative_time_ids)
-
             elif self.batch_axis_choice == "snapshot":
                 num_scenes = root.compute_first_size()  # if self.num_records is None else min(self.num_records, root.compute_first_size())
                 time_dim = root.time_dim
@@ -541,24 +647,60 @@ class GidaV6(Dataset):
             extended_network_ids = np.full([num_samples], network_index)
             flatten_ids = np.arange(flatten_index, flatten_index + num_samples)
 
-            network_index_map: dict[int, tuple[int | None, int | None]] = {}
-            # fid_nid_map: dict[int, int] = {}
+            local_chunk_map: dict[int, int] = {}
             lefts: np.ndarray | None = tuples[0] if tuples[0] is not None else None
             rights: np.ndarray | None = tuples[1] if tuples[1] is not None else None
-            for i, fid in enumerate(flatten_ids):
-                left = lefts[i] if lefts is not None else None
-                right = rights[i] if rights is not None else None
-                network_index_map[fid] = (left, right)
-                # fid_nid_map[fid] = network_index
+
+            num_chunks = root.compute_num_chunks()
+            num_scenes = root.compute_first_size()
+
+            if num_scenes != root.attrs["num_samples"]:
+                print(
+                    f"WARN! The number of samples ({num_samples}) does not match the #samples ({root.attrs['num_samples']}) recorded in metadata of root ({network_index})"  # noqa: E501
+                )
+
+            nscenes_per_chunk = num_scenes // num_chunks
+
+            if self.batch_axis_choice == "scene":
+                chunk_ids = np.repeat(np.arange(num_chunks), nscenes_per_chunk)
+                residuals = abs(len(flatten_ids) - len(chunk_ids))
+                if residuals != 0:
+                    # pad the last chunk
+                    last_chunk_id = num_chunks
+                    chunk_ids = np.pad(chunk_ids, (0, residuals), mode="constant", constant_values=last_chunk_id)
+
+            elif self.batch_axis_choice == "snapshot":
+                chunk_ids = np.repeat(np.arange(num_chunks), nscenes_per_chunk * root.time_dim)
+                residuals = abs(len(flatten_ids) - len(chunk_ids))
+                if residuals != 0:
+                    # pad the last chunk
+                    last_chunk_id = num_chunks
+                    chunk_ids = np.pad(chunk_ids, (0, residuals), mode="constant", constant_values=last_chunk_id)
+            else:  # temporal
+                # For any flatten_id in temporal mode, we have to access all chunks of a specific network anyway
+                chunk_ids = [-1] * len(flatten_ids)
+            local_chunk_map.update(zip(flatten_ids, chunk_ids))
+            ################################################################
+            # local_index_map: dict[int, tuple[int | None, int | None]] = {}
+            # for i, fid in enumerate(flatten_ids):
+            #     left = lefts[i] if lefts is not None else None
+            #     right = rights[i] if rights is not None else None
+            #     local_index_map[fid] = (left, right)
+            ################################################################
             # update the global map
-            index_map.update(network_index_map)
+            if lefts is None:
+                lefts = [None] * num_samples  # type:ignore
+            if rights is None:
+                rights = [None] * num_samples  # type:ignore
+            index_map.update(zip(flatten_ids, zip(lefts, rights)))  # type:ignore
             network_map.update(zip(flatten_ids, extended_network_ids))  # network_map.update(fid_nid_map)  #
+            chunk_map.update(local_chunk_map)
             # update flatten index indicator and network index
             flatten_index += num_samples
             num_samples_per_network_list.append(num_samples)
 
         length = flatten_index
-        return length, index_map, network_map, num_samples_per_network_list
+        return length, index_map, network_map, chunk_map, num_samples_per_network_list
 
     def is_node(self, component: str) -> bool:
         return component in ["junction", "tank", "reservoir", "node"]

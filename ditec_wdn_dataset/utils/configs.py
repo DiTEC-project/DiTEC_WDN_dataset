@@ -407,7 +407,6 @@ class GidaConfig(AbstractConfig):
     verbose: bool = False  # flag allowing more debug info. Default is False
     split_type: Literal["temporal", "scene"] = "scene"  # horizontal cut for scene choice, and temporal cut for temporal.
     split_set: Literal["train", "val", "test", "all"] = "all"  # following the splitting ratio 60:20:20
-    split_fixed: bool = False  # flag indicates whether the cutting positions are pre-defined (fixed) or dynamic
     skip_nodes_list: list[list[str]] = []  # node names want to be skipped. By default, it includes the skip_nodes in config
     skip_types_list: list[list[str]] = []  # sugar-coating removal by types (node, link, junction, tank ...). Check the component in zarr.
     unstackable_pad_value: Any = 0.0  # if component has a missing value, we pad this with unstackable_pad_value
