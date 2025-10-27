@@ -624,6 +624,7 @@ class GidaV6(Dataset):
         # total_num_samples: int = sum_of_root_sizes  # if self.num_records is None else min(sum_of_root_sizes, self.num_records)
         # num_samples_per_network = total_num_samples // len(self._roots)
 
+        num_networks = len(self._roots)
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
                 # arr WILL have shape <merged>(#scenes, #nodes_or_#links, #statics + time_dims * #dynamics)
@@ -645,7 +646,8 @@ class GidaV6(Dataset):
             else:
                 raise NotImplementedError
             extended_network_ids = np.full([num_samples], network_index)
-            flatten_ids = np.arange(flatten_index, flatten_index + num_samples)
+            # flatten_ids = np.arange(flatten_index, flatten_index + num_samples)
+            flatten_ids = np.arange(num_samples) * num_networks + network_index
 
             local_chunk_map: dict[int, int] = {}
             lefts: np.ndarray | None = tuples[0] if tuples[0] is not None else None
@@ -698,6 +700,14 @@ class GidaV6(Dataset):
             # update flatten index indicator and network index
             flatten_index += num_samples
             num_samples_per_network_list.append(num_samples)
+
+        # trick to perform interleaving, we sort the index map. The result will be
+        # 0     -> sample_0_dataset_0
+        # 1     -> sample_0_dataset_1
+        # N-1   -> sample_0_dataset_N-1
+        # N   -> sample_1_dataset_0
+        # ...
+        index_map = OrderedDict(sorted(index_map.items()))
 
         length = flatten_index
         return length, index_map, network_map, chunk_map, num_samples_per_network_list

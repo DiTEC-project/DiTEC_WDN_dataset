@@ -562,6 +562,7 @@ class GidaV7(Dataset):
                 f"ERROR! Simulation time (duration) must be equal in option batch_axis_choice <{self.batch_axis_choice}>, but get {time_dims}!"
             )
 
+        num_networks = len(self._roots)
         for network_index, root in enumerate(self._roots):
             if self.batch_axis_choice == "scene":
                 # arr WILL have shape <merged>(#scenes, #nodes_or_#links, #statics + time_dims * #dynamics)
@@ -584,7 +585,8 @@ class GidaV7(Dataset):
             else:
                 raise NotImplementedError
             extended_network_ids = np.full([num_samples], network_index)
-            flatten_ids = np.arange(flatten_index, flatten_index + num_samples)
+            # flatten_ids = np.arange(flatten_index, flatten_index + num_samples)
+            flatten_ids = np.arange(num_samples) * num_networks + network_index
 
             network_index_map: dict[int, tuple[int | None, int | None]] = {}
             # fid_nid_map: dict[int, int] = {}
@@ -601,7 +603,13 @@ class GidaV7(Dataset):
             # update flatten index indicator and network index
             flatten_index += num_samples
             num_samples_per_network_list.append(num_samples)
-
+        # trick to perform interleaving, we sort the index map. The result will be
+        # 0     -> sample_0_dataset_0
+        # 1     -> sample_0_dataset_1
+        # N-1   -> sample_0_dataset_N-1
+        # N   -> sample_1_dataset_0
+        # ...
+        index_map = OrderedDict(sorted(index_map.items()))
         length = flatten_index
         return length, index_map, network_map, num_samples_per_network_list
 
