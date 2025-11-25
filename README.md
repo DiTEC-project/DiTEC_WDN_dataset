@@ -29,17 +29,19 @@ MIT license. See the LICENSE file for more details.
 
 # Citing DiTEC-WDN
 
-If you use the dataset, please cite:
+If you use the dataset or the code, please cite:
 
 ```latex
-@misc{truong2025dwd,
-      title={DiTEC-WDN: A Large-Scale Dataset of Hydraulic Scenarios across Multiple Water Distribution Networks}, 
-      author={Huy Truong and Andrés Tello and Alexander Lazovik and Victoria Degeler},
-      year={2025},
-      eprint={2503.17167},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2503.17167},
-      note = {HT and AT contributed equally to this work. The dataset is linked to a paper submitted to *Nature Scientific Data*.}
+@article{truong2025dwd,
+  author    = {Huy Truong and Andr{\'e}s Tello and Alexander Lazovik and Victoria Degeler},
+  title     = {DiTEC-WDN: A Large-Scale Dataset of Hydraulic Scenarios across Multiple Water Distribution Networks},
+  journal   = {Scientific Data},
+  year      = {2025},
+  volume    = {12},
+  number    = {1},
+  pages     = {1733},
+  doi       = {10.1038/s41597-025-06026-0},
+  url       = {https://doi.org/10.1038/s41597-025-06026-0},
+  issn      = {2052-4463}
 }
 ```
