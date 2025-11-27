@@ -783,7 +783,12 @@ class GidaV6(Dataset):
 
         if len(selected_placeholder_components) <= 0:
             assert all(has_asterisks)
-            selected_placeholder_components.extend([self.get_component(a) for a in sorted_attrs if isinstance(a, str)])
+            # prevent duplication in components
+            for a in sorted_attrs:
+                if isinstance(a, str):
+                    com = self.get_component(a)
+                    if com not in selected_placeholder_components:
+                        selected_placeholder_components.append(com)
 
         return selected_placeholder_components
 
