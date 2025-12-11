@@ -42,7 +42,9 @@ LARGE_NUMBER = 10000
 IndexType = Union[slice, Tensor, np.ndarray, Sequence]
 
 
-def parse2data(x: np.ndarray, edge_index: np.ndarray, edge_attr: Optional[np.ndarray], y: Optional[np.ndarray], edge_y: Optional[np.ndarray]) -> Data:
+def parse2data(
+    x: np.ndarray, edge_index: np.ndarray, edge_attr: Optional[np.ndarray], y: Optional[np.ndarray], edge_y: Optional[np.ndarray], **kwargs: Any
+) -> Data:
     data_dict: dict[str, Any] = defaultdict(list)
     data_dict["edge_index"] = torch.as_tensor(edge_index, dtype=torch.long)
     data_dict["x"] = torch.as_tensor(x, dtype=torch.float)
@@ -52,6 +54,11 @@ def parse2data(x: np.ndarray, edge_index: np.ndarray, edge_attr: Optional[np.nda
         data_dict["y"] = torch.as_tensor(y, dtype=torch.float)
     if edge_y is not None:
         data_dict["edge_y"] = torch.as_tensor(edge_y, dtype=torch.float)
+
+    for k, v in kwargs.items():
+        if not isinstance(v, Tensor):
+            v = torch.as_tensor([v])
+        data_dict[k] = v
 
     data = Data.from_dict(data_dict)
     return data
@@ -779,7 +786,7 @@ class GidaV6(Dataset):
                         placeholder_components.append(sub_component)
 
         # sort and deduplicate by okeys
-        selected_placeholder_components = [k for k in okeys if k in placeholder_components and k not in skip_types]
+        selected_placeholder_components = [k for k in okeys if k in placeholder_components]  # and k not in skip_types
 
         if len(selected_placeholder_components) <= 0:
             assert all(has_asterisks)
