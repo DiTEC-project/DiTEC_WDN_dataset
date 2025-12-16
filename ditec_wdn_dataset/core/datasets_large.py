@@ -218,6 +218,7 @@ class GidaV6(Dataset):
         do_cache: bool = False,
         subset_shuffle: bool = False,
         dataset_log_pt_path: str = r"",
+        indexing: Literal["static", "dynamic"] = "static",
         **kwargs,
     ) -> None:
         """Correponding to configs.py/GiDaConfig.
@@ -247,7 +248,7 @@ class GidaV6(Dataset):
             do_cache (bool, optional): flag indicates dump everything in mem. Very fast but OOM can happen. Defaults to False.
             subset_shuffle (bool, optional): flag indicates whether subset is shuffled. After splitting WHOLE TRAIN/VAL/TEST sets, we perform subset shuffling per set. Defaults to True.
             dataset_log_pt_path (str, optional): .pt path where storing subset indices and statistic (when you call `gather_statistic`). If `dataset_log_pt_path=""`, we WON'T LOAD SHUFFLE IDs.  Defaults to ''.
-
+            indexing (LLiteral[&quot;static&quot;, &quot;dynamic&quot;]): Two ways to generate indices, dynamic is faster. Default is static.
         """  # noqa: E501
         self.input_paths = input_paths
         self.zip_file_paths = zip_file_paths
@@ -284,7 +285,8 @@ class GidaV6(Dataset):
         self.subset_shuffle = subset_shuffle
         self.train_shuffle_ids, self.val_shuffle_ids, self.test_shuffle_ids = [], [], []
         self.dataset_log_pt_path = dataset_log_pt_path
-
+        self.indexing: Literal["static", "dynamic"] = indexing
+        self.train_ids, self.val_ids, self.test_ids = [], [], []
         # allow user customize function here
         self.custom_process()
 
@@ -300,15 +302,32 @@ class GidaV6(Dataset):
         return self.length
 
     def custom_process(self) -> None:
-        # load arrays from zip file (and input_paths)
-        self.length, self._index_map, self._network_map, self._chunk_map, self._num_samples_per_network_list = self.compute_indices(
-            zip_file_paths=self.zip_file_paths,
-            input_paths=self.input_paths,
-        )
+        if self.indexing == "dynamic":
+            # load arrays from zip file (and input_paths)
+            (self._nid_nsamples_dict, self._nid_nchunks_dict, self._nid_time_dim_dict, self.max_length, self.num_networks) = self.compute_indices(
+                zip_file_paths=self.zip_file_paths,
+                input_paths=self.input_paths,
+            )
+            self.max_time_dim = max(self._nid_time_dim_dict.values())
+            self.length = self.max_length * self.num_networks
+            self.update_indices()
 
-        self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self._get_num_samples())
+            self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(
+                split_ratios=self.split_ratios, num_samples=self._get_num_samples()
+            )
+        else:
+            # load arrays from zip file (and input_paths)
+            self.length, self._index_map, self._network_map, self._chunk_map, self._num_samples_per_network_list = self.compute_indices_backup(
+                zip_file_paths=self.zip_file_paths,
+                input_paths=self.input_paths,
+            )
 
-    def update_indices(self) -> None:
+            self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio_backup(
+                self.split_ratios, num_samples=self._get_num_samples()
+            )
+
+    ##########################################
+    def update_indices_backup(self) -> None:
         # update _indices
         attempted_ids = self.train_ids + self.val_ids + self.test_ids
         if len(attempted_ids) > 0:
@@ -317,7 +336,18 @@ class GidaV6(Dataset):
             assert self._index_map is not None and len(self._index_map) > 0
             self._indices = list(self._index_map.keys())
 
-    def _shuffle_internal(self, my_ids: list[int] | np.ndarray, return_perm: bool = False) -> list[int] | Tuple[list[int], list[int]]:
+    def update_indices(self) -> None:
+        # update _indices
+        attempted_ids = self.train_ids + self.val_ids + self.test_ids
+        if len(attempted_ids) > 0:
+            self._indices = attempted_ids
+        else:
+            assert self.length is not None
+            self._indices = list(range(self.length))
+
+    ##########################################
+
+    def _shuffle_internal_backup(self, my_ids: list[int] | np.ndarray, return_perm: bool = False) -> list[int] | Tuple[list[int], list[int]]:
         # np-ize the ids
         if not isinstance(my_ids, np.ndarray):
             my_indices = np.asarray(my_ids)
@@ -342,6 +372,49 @@ class GidaV6(Dataset):
         else:
             return my_indices
 
+    def _shuffle_internal(self, my_ids: list[int] | np.ndarray, return_perm: bool = False) -> list[int] | Tuple[list[int], list[int]]:
+        # np-ize the ids
+        if not isinstance(my_ids, np.ndarray):
+            my_indices = np.asarray(my_ids)
+        else:
+            my_indices = my_ids
+
+        # retrieve chunk_ids
+        nid_rid_tuples = [self._unflatten(idx, num_networks=self.num_networks) for idx in my_indices]
+
+        chunk_ids = []
+        for tup in nid_rid_tuples:
+            nid, rid = tup[0], tup[1]
+            nchunks = self._nid_nchunks_dict[nid]
+            if self.batch_axis_choice == "scene":
+                length_per_chunk = max(1, self.max_length // nchunks)
+                chunk_id = rid // length_per_chunk
+            elif self.batch_axis_choice == "snapshot":
+                num_scenes = self._roots[nid].compute_first_size()
+                length_per_chunk = max(1, self.max_length * num_scenes // nchunks)
+                chunk_id = rid // length_per_chunk
+            else:  # temporal
+                chunk_id = -1  # access all chunks
+            chunk_ids.append(chunk_id)
+        chunk_ids = np.asarray(chunk_ids)
+
+        # group up indices by chunk id
+        chunk_groups: dict[int, np.ndarray] = {c: my_indices[chunk_ids == c] for c in np.unique(chunk_ids)}
+        # inter-shuffle
+        perm = [np.random.permutation(chunk_indices.shape[0]) for chunk_indices in chunk_groups.values()]
+        chunk_groups = {c: chunk_indices[perm[i]] for i, (c, chunk_indices) in enumerate(chunk_groups.items())}
+        # intra-shuffle and merge
+        cs = np.random.permutation(np.array(list(chunk_groups.keys()))).tolist()
+        my_indices = [chunk_groups[c] for c in cs]
+        my_indices = np.concatenate(my_indices, axis=0).flatten().tolist()
+
+        if return_perm:
+            perm = np.concatenate(perm).flatten().tolist()
+            return my_indices, perm
+        else:
+            return my_indices
+
+    ####################################################################################
     def shuffle(
         self,
         return_perm: bool = False,
@@ -358,7 +431,11 @@ class GidaV6(Dataset):
         """
         assert self._indices is not None, r"ERROR! self._indices should be not None!"
 
-        tup = self._shuffle_internal(self._indices, return_perm)  # type:ignore
+        if self.indexing == "dynamic":
+            tup = self._shuffle_internal(self._indices, return_perm)  # type:ignore
+        else:
+            tup = self._shuffle_internal_backup(self._indices, return_perm)  # type:ignore
+
         if return_perm:
             my_indices, perm = tup
             # assign new indices to self._indices
@@ -373,6 +450,7 @@ class GidaV6(Dataset):
             dataset._indices = my_indices
             return dataset
 
+    ####################################################################################
     def _internal_subset_shuffle(
         self, sampling_strategy: Literal["default", "random"] = "default"
     ) -> tuple[list[int], list[int], list[int], list[int], list[int], list[int]]:
@@ -514,7 +592,10 @@ class GidaV6(Dataset):
     def load_shuffle_indices_from_disk(self, sanity_check: bool = True) -> bool:
         return self._load_shuffle_indices_from_disk_internal(path=self.dataset_log_pt_path, sanity_check=sanity_check)
 
-    def compute_subset_ids_by_ratio(self, split_ratios: tuple[float, float, float], num_samples: int) -> tuple[list[int], list[int], list[int]]:
+    ###########################################################################################################
+    def compute_subset_ids_by_ratio_backup(
+        self, split_ratios: tuple[float, float, float], num_samples: int
+    ) -> tuple[list[int], list[int], list[int]]:
         train_ids, val_ids, test_ids = [], [], []
         len_of_list = len(self._num_samples_per_network_list)
 
@@ -555,33 +636,14 @@ class GidaV6(Dataset):
                 network_val_ids = network_val_ids[: expected_valid_samples - len(val_ids)]
                 network_test_ids = network_test_ids[: expected_test_samples - len(test_ids)]
 
-            # if self.subset_shuffle:
-            #     if self.batch_axis_choice == "temporal":
-            #         # print(
-            #         #     "WARN! Subset shuffle is on, but in the case of temporal, it is impossible to balance shuffling and chunk processing time"
-            #         #     "user should reduce the batch_size to limit the number of loading chunks per iteration! Gida will do a normal shuffling!"
-            #         # )
-            #         network_train_ids = network_train_ids[np.random.permutation(network_train_ids.shape[0])]
-            #         network_val_ids = network_val_ids[np.random.permutation(network_val_ids.shape[0])]
-            #         network_test_ids = network_test_ids[np.random.permutation(network_test_ids.shape[0])]
-            #     else:
-            #         root = self._roots[i]
-            #         num_chunks: int = root.compute_num_chunks()
-            #         assert num_samples % num_chunks == 0, (
-            #             f"ERROR! subset_shuffle is on but unable to shuffle when the ratio between num_samples({num_samples}) and num_chunks({num_chunks}) is odd"
-            #         )
-            #         network_train_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_train_ids)
-            #         network_val_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_val_ids)
-            #         network_test_ids = self._shuffle_by_chunk(num_chunks=num_chunks, my_ids=network_test_ids)
-
             network_train_ids = network_train_ids.tolist()
             network_val_ids = network_val_ids.tolist()
             network_test_ids = network_test_ids.tolist()
 
             if self.subset_shuffle:
-                network_train_ids = self._shuffle_internal(my_ids=network_train_ids)
-                network_val_ids = self._shuffle_internal(my_ids=network_val_ids)
-                network_test_ids = self._shuffle_internal(my_ids=network_test_ids)
+                network_train_ids = self._shuffle_internal_backup(my_ids=network_train_ids)
+                network_val_ids = self._shuffle_internal_backup(my_ids=network_val_ids)
+                network_test_ids = self._shuffle_internal_backup(my_ids=network_test_ids)
 
             train_ids.extend(network_train_ids)
             val_ids.extend(network_val_ids)
@@ -590,18 +652,20 @@ class GidaV6(Dataset):
 
         return train_ids, val_ids, test_ids
 
-    # def _shuffle_by_chunk(self, num_chunks: int, my_ids: np.ndarray) -> np.ndarray:
-    #     my_ids = my_ids.reshape([num_chunks, -1])
-    #     # we shuffle columns
-    #     permuted_indices = np.argsort(np.random.rand(*my_ids.shape), axis=1)
-    #     my_ids = np.take_along_axis(my_ids, permuted_indices, axis=1)
-    #     # then, we shuffle the chunks
-    #     my_ids = my_ids[np.random.permutation(num_chunks)]
-    #     # flatten back
-    #     my_ids = my_ids.flatten()
-    #     return my_ids
+    def compute_subset_ids_by_ratio(self, split_ratios: tuple[float, float, float], num_samples: int) -> tuple[list[int], list[int], list[int]]:
+        assert self._indices is not None
+        expected_train_samples = int(num_samples * split_ratios[0])
+        expected_valid_samples = int(num_samples * split_ratios[1])
+        expected_test_samples = num_samples - expected_train_samples - expected_valid_samples
 
-    def compute_indices(
+        train_ids = self._indices[:expected_train_samples]
+        val_ids = self._indices[expected_train_samples : expected_train_samples + expected_valid_samples]
+        test_ids = self._indices[-expected_test_samples:]
+
+        return train_ids, val_ids, test_ids
+
+    ###########################################################################################################
+    def compute_indices_backup(
         self, zip_file_paths: list[str], input_paths: list[str] = []
     ) -> tuple[int, dict[int, tuple[int | None, int | None]], dict[int, int], dict[int, int], list[int]]:
         # this is must-have since the size of networks is different.
@@ -718,6 +782,34 @@ class GidaV6(Dataset):
 
         length = flatten_index
         return length, index_map, network_map, chunk_map, num_samples_per_network_list
+
+    def compute_indices(
+        self, zip_file_paths: list[str], input_paths: list[str] = []
+    ) -> tuple[dict[int, int], dict[int, int], dict[int, int], int, int]:
+        self.load_roots(zip_file_paths, input_paths)
+        # chunk_map maps flatten_id to chunk_id => for shuffling and accelerate IO time
+        num_networks = len(self._roots)
+        max_length = -1
+        nid_length_dict: dict[int, int] = {}
+        nid_nchunks_dict: dict[int, int] = {}
+        nid_time_dict: dict[int, int] = {}
+
+        for nid, root in enumerate(self._roots):
+            if self.batch_axis_choice == "scene":
+                num_samples = root.compute_first_size()
+            elif self.batch_axis_choice == "temporal":
+                num_samples = root.time_dim
+            else:  # snapshot
+                num_samples = root.compute_first_size() * root.time_dim
+
+            max_length = max(max_length, num_samples)
+            nid_length_dict[nid] = num_samples
+            nid_nchunks_dict[nid] = root.compute_num_chunks()
+            nid_time_dict[nid] = root.time_dim
+
+        return (nid_length_dict, nid_nchunks_dict, nid_time_dict, max_length, num_networks)
+
+    ###########################################################################################################
 
     def is_node(self, component: str) -> bool:
         return component in ["junction", "tank", "reservoir", "node"]
@@ -1228,7 +1320,13 @@ class GidaV6(Dataset):
             print("*" * 40)
         return cat_array
 
-    def get(self, idx: int | Sequence) -> Any:
+    def _unflatten(self, flat_id: int, num_networks: int) -> tuple[int, int]:
+        rid = flat_id // num_networks
+        nid = flat_id % num_networks
+        return nid, rid
+
+    #################################################################################################
+    def get_backup(self, idx: int | Sequence) -> Any:
         assert self._indices is not None
         if isinstance(idx, int):
             fids: list[int] = self._indices[idx]  # [idx]  #
@@ -1276,6 +1374,79 @@ class GidaV6(Dataset):
                 counter += 1
         assert counter == batch_size
         return batch  # type:ignore
+
+    def get_dynamic(self, idx: int | Sequence) -> Any:
+        if isinstance(idx, int):
+            fids: list[int] = self._indices[idx]
+        else:
+            idx_list = np.asarray(idx).flatten().tolist()
+
+            fids: list[int] = [self._indices[i] for i in idx_list]
+
+        batch_size = len(fids)
+        # unflatten
+
+        nid_rid_tuples = [self._unflatten(fid, num_networks=self.num_networks) for fid in fids]
+
+        # group temporal ids by network id to save querying time
+        root_vindices_dict = defaultdict(list)
+        for t in nid_rid_tuples:
+            nid, rid = t[0], t[1]
+
+            if self.batch_axis_choice == "scene":
+                id_tuple = (rid, None)
+            elif self.batch_axis_choice == "temporal":
+                if rid >= self._nid_time_dim_dict[nid]:  # cycle indexing
+                    rid = rid % self._nid_time_dim_dict[nid]
+                id_tuple = (None, rid)
+            else:  # snapshot
+                max_time_dim = self.max_time_dim
+                sid = rid // max_time_dim
+                tid = rid % max_time_dim
+                if tid >= self._nid_time_dim_dict[nid]:  # cycle indexing
+                    tid = tid % self._nid_time_dim_dict[nid]
+                id_tuple = (sid, tid)
+
+            root_vindices_dict[nid].append(id_tuple)
+        batch = []
+        counter: int = 0
+        for nid in root_vindices_dict.keys():
+            root: GidaV6.Root = self._roots[nid]
+            # print(f"Querying network nid=({nid})- zip_path=({os.path.basename(root.zip_file_path)}) ...")
+            if counter >= batch_size:
+                break
+            index_tup_list: list[tuple[int | None, int | None]] = root_vindices_dict[nid]
+            node_array = self.stack_features(root=root, indices=index_tup_list, which_array="node")
+            assert node_array is not None
+
+            edge_array = self.stack_features(root=root, indices=index_tup_list, which_array="edge")
+
+            label_array = self.stack_features(root=root, indices=index_tup_list, which_array="label")
+
+            edge_label_array = self.stack_features(root=root, indices=index_tup_list, which_array="edge_label")
+
+            for i in range(node_array.shape[0]):
+                if counter >= batch_size:
+                    break
+                x = node_array[i]
+                edge_attr = edge_array[i] if edge_array is not None else None
+                y = label_array[i] if label_array is not None else None
+                edge_y = edge_label_array[i] if edge_label_array is not None else None
+                edge_index: np.ndarray = root.edge_index  # self._roots[self._network_map[i]].edge_index  # type:ignore
+
+                dat = parse2data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y, edge_y=edge_y)
+                batch.append(dat)
+                counter += 1
+        assert counter == batch_size
+        return batch  # type:ignore
+
+    def get(self, idx: int | Sequence) -> Any:
+        if self.indexing == "dynamic":
+            return self.get_dynamic(idx)
+        else:
+            return self.get_backup(idx)
+
+    #################################################################################################
 
     def indices(self) -> Sequence:
         assert self._indices is not None
