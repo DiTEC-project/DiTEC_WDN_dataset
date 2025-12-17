@@ -304,17 +304,30 @@ class GidaV6(Dataset):
     def custom_process(self) -> None:
         if self.indexing == "dynamic":
             # load arrays from zip file (and input_paths)
+            if self.verbose:
+                print("Start compute_indices...")
             (self._nid_nsamples_dict, self._nid_nchunks_dict, self._nid_time_dim_dict, self.max_length, self.num_networks) = self.compute_indices(
                 zip_file_paths=self.zip_file_paths,
                 input_paths=self.input_paths,
             )
+            if self.verbose:
+                print("End compute_indices...")
             self.max_time_dim = max(self._nid_time_dim_dict.values())
             self.length = self.max_length * self.num_networks
-            self.update_indices()
 
+            if self.verbose:
+                print("Start update_indices...")
+            self.update_indices()
+            if self.verbose:
+                print("End update_indices...")
+
+            if self.verbose:
+                print("Start compute_subset_ids_by_ratio...")
             self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(
                 split_ratios=self.split_ratios, num_samples=self._get_num_samples()
             )
+            if self.verbose:
+                print("End compute_subset_ids_by_ratio...")
         else:
             # load arrays from zip file (and input_paths)
             self.length, self._index_map, self._network_map, self._chunk_map, self._num_samples_per_network_list = self.compute_indices_backup(
@@ -677,8 +690,8 @@ class GidaV6(Dataset):
         chunk_map: dict[int, int] = OrderedDict()
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
-        self.load_roots(zip_file_paths, input_paths)
 
+        self.load_roots(zip_file_paths, input_paths)
         if self.batch_axis_choice in ["scene", "temporal"]:
             time_dims = [r.time_dim for r in self._roots]
             assert sum(time_dims) / len(time_dims) == time_dims[0], (
@@ -786,7 +799,11 @@ class GidaV6(Dataset):
     def compute_indices(
         self, zip_file_paths: list[str], input_paths: list[str] = []
     ) -> tuple[dict[int, int], dict[int, int], dict[int, int], int, int]:
+        if self.verbose:
+            print("Start load_roots...")
         self.load_roots(zip_file_paths, input_paths)
+        if self.verbose:
+            print("End load_roots...")
         # chunk_map maps flatten_id to chunk_id => for shuffling and accelerate IO time
         num_networks = len(self._roots)
         max_length = -1
