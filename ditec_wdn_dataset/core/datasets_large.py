@@ -1579,6 +1579,7 @@ class GidaV6(Dataset):
                 num_channels = channel_splitters[i]
                 t = flatten_array[:, current_idx : current_idx + num_channels]
 
+                t = t[t != self.unstackable_pad_value]
                 # t = t.flatten()
                 current_idx += num_channels
 
@@ -1609,6 +1610,7 @@ class GidaV6(Dataset):
             min_val = dac.concatenate(min_vals, axis=channel_dim)
             max_val = dac.concatenate(max_vals, axis=channel_dim)
         else:
+            flatten_array = flatten_array[flatten_array != self.unstackable_pad_value]
             std_val, mean_val = flatten_array.std(axis=norm_dim), flatten_array.mean(axis=norm_dim)
             min_val, max_val = flatten_array.min(axis=norm_dim), flatten_array.max(axis=norm_dim)
 
