@@ -1001,23 +1001,24 @@ class GidaV6(Dataset):
 
             # update edge mask
             adj_masks = []
+            edge_masks = []
+
             edge_names = []
             for edge_com in edge_components:
                 if edge_com not in edge_skip_types:
                     edge_names.extend(self.get_object_names_by_component(root=root, component=edge_com))
 
-            id2index = {id_: i for i, id_ in enumerate(edge_names)}
-            edge_mask = np.zeros_like(edge_names, dtype=bool)
             is_edge_names_empty = len(edge_names) <= 0
             for src, dst, link_name in adj_list:
                 is_selected = src in node_names and dst in node_names
                 is_in_edge_names = is_edge_names_empty or link_name in edge_names
                 if is_in_edge_names:
-                    edge_mask[id2index[link_name]] = is_selected
+                    edge_masks.append(is_selected)
 
                 adj_masks.append(is_selected and is_in_edge_names)
-            assert len(edge_names) == len(edge_mask)
-            edge_names = list(compress(edge_names, edge_mask))
+
+            edge_names = list(compress(edge_names, edge_masks))
+            edge_mask = np.asarray(edge_masks, dtype=bool)
             adj_mask = np.asarray(adj_masks, dtype=bool)
 
             root.node_mask = node_mask
@@ -1609,9 +1610,31 @@ class GidaV6(Dataset):
             min_val = dac.concatenate(min_vals, axis=channel_dim)
             max_val = dac.concatenate(max_vals, axis=channel_dim)
         else:
-            flatten_array = flatten_array[flatten_array != self.unstackable_pad_value]
-            std_val, mean_val = flatten_array.std(axis=norm_dim), flatten_array.mean(axis=norm_dim)
-            min_val, max_val = flatten_array.min(axis=norm_dim), flatten_array.max(axis=norm_dim)
+            # the below code breaks the shape
+            # flatten_array = flatten_array[flatten_array != self.unstackable_pad_value]
+            # std_val, mean_val = flatten_array.std(axis=norm_dim), flatten_array.mean(axis=norm_dim)
+            # min_val, max_val = flatten_array.min(axis=norm_dim), flatten_array.max(axis=norm_dim)
+
+            std_vals, mean_vals, min_vals, max_vals = [], [], [], []
+            for i in range(flatten_array.shape[-1]):
+                col_array = flatten_array[..., i]
+                col_array = col_array[col_array != self.unstackable_pad_value]
+                col_std_val, col_mean_val = col_array.std(axis=norm_dim), col_array.mean(axis=norm_dim)
+                col_min_val, col_max_val = col_array.min(axis=norm_dim), col_array.max(axis=norm_dim)
+                std_vals.append(col_std_val)
+                mean_vals.append(col_mean_val)
+                min_vals.append(col_min_val)
+                max_vals.append(col_max_val)
+            if len(std_vals) > 1:
+                std_val = dac.stack(std_vals, axis=0)
+                mean_val = dac.stack(mean_vals, axis=0)
+                min_val = dac.stack(min_vals, axis=0)
+                max_val = dac.stack(max_vals, axis=0)
+            else:
+                std_val = std_vals[0]
+                mean_val = mean_vals[0]
+                min_val = min_vals[0]
+                max_val = max_vals[0]
 
         (min_val, max_val, mean_val, std_val) = compute(*(min_val, max_val, mean_val, std_val))
 
@@ -1621,10 +1644,10 @@ class GidaV6(Dataset):
             mean_val = np.asarray(mean_val, dtype=np.float32).reshape([1, -1])
             std_val = np.asarray(std_val, dtype=np.float32).reshape([1, -1])
         else:
-            min_val = min_val.astype(np.float32)
-            max_val = max_val.astype(np.float32)
-            mean_val = mean_val.astype(np.float32)
-            std_val = std_val.astype(np.float32)
+            min_val = min_val.astype(np.float32).reshape([1, -1])
+            max_val = max_val.astype(np.float32).reshape([1, -1])
+            mean_val = mean_val.astype(np.float32).reshape([1, -1])
+            std_val = std_val.astype(np.float32).reshape([1, -1])
 
         if to_tensor:
             std_val = from_numpy(std_val)

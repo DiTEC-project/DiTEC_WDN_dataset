@@ -1352,6 +1352,7 @@ class GidaV7(Dataset):
                 num_channels = channel_splitters[i]
                 t = flatten_array[:, current_idx : current_idx + num_channels]
 
+                t = t[t != self.unstackable_pad_value]
                 # t = t.flatten()
                 current_idx += num_channels
 
@@ -1382,8 +1383,28 @@ class GidaV7(Dataset):
             min_val = dac.concatenate(min_vals, axis=channel_dim)
             max_val = dac.concatenate(max_vals, axis=channel_dim)
         else:
-            std_val, mean_val = flatten_array.std(axis=norm_dim), flatten_array.mean(axis=norm_dim)
-            min_val, max_val = flatten_array.min(axis=norm_dim), flatten_array.max(axis=norm_dim)
+            # std_val, mean_val = flatten_array.std(axis=norm_dim), flatten_array.mean(axis=norm_dim)
+            # min_val, max_val = flatten_array.min(axis=norm_dim), flatten_array.max(axis=norm_dim)
+            std_vals, mean_vals, min_vals, max_vals = [], [], [], []
+            for i in range(flatten_array.shape[-1]):
+                col_array = flatten_array[..., i]
+                col_array = col_array[col_array != self.unstackable_pad_value]
+                col_std_val, col_mean_val = col_array.std(axis=norm_dim), col_array.mean(axis=norm_dim)
+                col_min_val, col_max_val = col_array.min(axis=norm_dim), col_array.max(axis=norm_dim)
+                std_vals.append(col_std_val)
+                mean_vals.append(col_mean_val)
+                min_vals.append(col_min_val)
+                max_vals.append(col_max_val)
+            if len(std_vals) > 1:
+                std_val = dac.stack(std_vals, axis=0)
+                mean_val = dac.stack(mean_vals, axis=0)
+                min_val = dac.stack(min_vals, axis=0)
+                max_val = dac.stack(max_vals, axis=0)
+            else:
+                std_val = std_vals[0]
+                mean_val = mean_vals[0]
+                min_val = min_vals[0]
+                max_val = max_vals[0]
 
         (min_val, max_val, mean_val, std_val) = compute(*(min_val, max_val, mean_val, std_val))
 
@@ -1393,10 +1414,10 @@ class GidaV7(Dataset):
             mean_val = np.asarray(mean_val, dtype=np.float32).reshape([1, -1])
             std_val = np.asarray(std_val, dtype=np.float32).reshape([1, -1])
         else:
-            min_val = min_val.astype(np.float32)
-            max_val = max_val.astype(np.float32)
-            mean_val = mean_val.astype(np.float32)
-            std_val = std_val.astype(np.float32)
+            min_val = min_val.astype(np.float32).reshape([1, -1])
+            max_val = max_val.astype(np.float32).reshape([1, -1])
+            mean_val = mean_val.astype(np.float32).reshape([1, -1])
+            std_val = std_val.astype(np.float32).reshape([1, -1])
 
         if to_tensor:
             std_val = from_numpy(std_val)
