@@ -785,24 +785,23 @@ class GidaV7(Dataset):
 
             # update edge mask
             adj_masks = []
-            edge_masks = []
-
             edge_names = []
             for edge_com in edge_components:
                 if edge_com not in edge_skip_types:
                     edge_names.extend(self.get_object_names_by_component(root=root, component=edge_com))
 
+            id2index = {id_: i for i, id_ in enumerate(edge_names)}
+            edge_mask = np.zeros_like(edge_names, dtype=bool)
             is_edge_names_empty = len(edge_names) <= 0
             for src, dst, link_name in adj_list:
                 is_selected = src in node_names and dst in node_names
                 is_in_edge_names = is_edge_names_empty or link_name in edge_names
                 if is_in_edge_names:
-                    edge_masks.append(is_selected)
+                    edge_mask[id2index[link_name]] = is_selected
 
                 adj_masks.append(is_selected and is_in_edge_names)
-
-            edge_names = list(compress(edge_names, edge_masks))
-            edge_mask = np.asarray(edge_masks, dtype=bool)
+            assert len(edge_names) == len(edge_mask)
+            edge_names = list(compress(edge_names, edge_mask))
             adj_mask = np.asarray(adj_masks, dtype=bool)
 
             root.node_mask = node_mask
