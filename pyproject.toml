@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dwd"
-version = "1.0.2"
+version = "1.0.3"
 description = ""
 authors = ["cuongth95 <truonghuycuong95@gmail.com>", "atello <a.tello@rug.nl>"]
 license = "MIT"
