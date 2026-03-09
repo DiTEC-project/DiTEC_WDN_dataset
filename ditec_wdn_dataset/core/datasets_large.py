@@ -1505,6 +1505,7 @@ class GidaV6(Dataset):
         norm_dim: Optional[int] = 0,
         to_tensor: bool = True,
         num_batches: int = 10,
+        keep_dim_when_group_norm: bool = True,
     ) -> tuple[
         np.ndarray | Tensor,
         np.ndarray | Tensor,
@@ -1609,6 +1610,7 @@ class GidaV6(Dataset):
             mean_val = dac.concatenate(mean_vals, axis=channel_dim)
             min_val = dac.concatenate(min_vals, axis=channel_dim)
             max_val = dac.concatenate(max_vals, axis=channel_dim)
+
         else:
             # the below code breaks the shape
             # flatten_array = flatten_array[flatten_array != self.unstackable_pad_value]
@@ -1648,6 +1650,13 @@ class GidaV6(Dataset):
             max_val = max_val.astype(np.float32).reshape([1, -1])
             mean_val = mean_val.astype(np.float32).reshape([1, -1])
             std_val = std_val.astype(np.float32).reshape([1, -1])
+
+        if do_group_norm and keep_dim_when_group_norm and std_val.shape[-1] > 1:
+            # do repeat iterleave given channel splitters
+            std_val = np.repeat(std_val, channel_splitters, axis=-1)
+            mean_val = np.repeat(mean_val, channel_splitters, axis=-1)
+            min_val = np.repeat(min_val, channel_splitters, axis=-1)
+            max_val = np.repeat(max_val, channel_splitters, axis=-1)
 
         if to_tensor:
             std_val = from_numpy(std_val)
