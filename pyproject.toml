@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "dwd"
+name = "ditec-water-dataset"
 version = "1.0.3"
 description = ""
-authors = ["cuongth95 <truonghuycuong95@gmail.com>", "atello <a.tello@rug.nl>"]
+authors = ["htruong <truonghuycuong95@gmail.com>", "atello <a.tello@rug.nl>"]
 license = "MIT"
 readme = "README.md"
 packages = [
