@@ -1506,6 +1506,7 @@ class GidaV6(Dataset):
         to_tensor: bool = True,
         num_batches: int = 10,
         keep_dim_when_group_norm: bool = True,
+        overriden_which_array_attrs_map: dict[str, Any] = {},
     ) -> tuple[
         np.ndarray | Tensor,
         np.ndarray | Tensor,
@@ -1525,12 +1526,15 @@ class GidaV6(Dataset):
             "label": "y",
             "edge_label": "edge_y",
         }
-        which_array_attrs_map = {
-            "node": getattr(self._roots[0], "sorted_node_attrs"),
-            "edge": getattr(self._roots[0], "sorted_edge_attrs"),
-            "label": getattr(self._roots[0], "sorted_label_attrs"),
-            "edge_label": getattr(self._roots[0], "sorted_edge_label_attrs"),
-        }
+        if len(overriden_which_array_attrs_map) != 0:
+            which_array_attrs_map = overriden_which_array_attrs_map
+        else:
+            which_array_attrs_map = {
+                "node": getattr(self._roots[0], "sorted_node_attrs"),
+                "edge": getattr(self._roots[0], "sorted_edge_attrs"),
+                "label": getattr(self._roots[0], "sorted_label_attrs"),
+                "edge_label": getattr(self._roots[0], "sorted_edge_label_attrs"),
+            }
 
         time_dim = self._roots[0].time_dim
         param_attrs = which_array_attrs_map[which_array]
