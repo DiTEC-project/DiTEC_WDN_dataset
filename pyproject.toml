@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ditec-water-dataset"
-version = "1.0.3"
+version = "1.0.4"
 description = ""
 authors = ["htruong <truonghuycuong95@gmail.com>", "atello <a.tello@rug.nl>"]
 license = "MIT"
