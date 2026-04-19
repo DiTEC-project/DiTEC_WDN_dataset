@@ -1280,6 +1280,7 @@ class GidaV7(Dataset):
         num_batches: int = 10,
         keep_dim_when_group_norm: bool = True,
         overriden_which_array_attrs_map: dict[str, Any] = {},
+        prevent_group_norm: bool = False,
     ) -> tuple[
         np.ndarray | Tensor,
         np.ndarray | Tensor,
@@ -1336,7 +1337,12 @@ class GidaV7(Dataset):
                 cat_arrays.append(dac_arr)
 
         is_norm_dim_different_from_channel_dim: bool = norm_dim != -1 and norm_dim != len(cat_arrays[0].shape) - 1
-        do_group_norm: bool = is_norm_dim_different_from_channel_dim and are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot"
+        do_group_norm: bool = (
+            is_norm_dim_different_from_channel_dim
+            and are_all_same_as_sum_channels
+            and self.batch_axis_choice != "snapshot"
+            and not prevent_group_norm
+        )
         if is_norm_dim_different_from_channel_dim and not are_all_same_as_sum_channels and self.batch_axis_choice != "snapshot":
             print(
                 f"WARN! Networks' arrays do not match their channels. Group norm by channels is prohibited! Flatten norm along {norm_dim} instead!\
