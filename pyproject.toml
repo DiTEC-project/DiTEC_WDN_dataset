@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ditec-water-dataset"
-version = "1.0.5"
+version = "1.0.6"
 description = ""
 authors = ["htruong <truonghuycuong95@gmail.com>", "atello <a.tello@rug.nl>"]
 license = "MIT"
@@ -12,7 +12,12 @@ packages = [
 
 [tool.poetry.dependencies]
 python = "^3.10"
-
+zarr  = "^2.16.1"
+dask = "^2025.2.0"
+wntr = "^1.1.0"
+torch_geometric = "^2.5.3"
+scipy = "^1.15.2"
+numcodecs = "^0.12.1"
 
 [build-system]
 requires = ["poetry-core"]
