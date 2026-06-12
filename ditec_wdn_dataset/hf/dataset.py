@@ -312,6 +312,7 @@ class GidaV7(Dataset):
         do_cache: bool = False,
         subset_shuffle: bool = False,
         dataset_log_pt_path: str = r"",
+        do_repeat_time_dim_for_scene: bool = False,
         **kwargs,
     ) -> None:
         """Correponding to configs.py/GiDaConfig.
@@ -342,7 +343,7 @@ class GidaV7(Dataset):
             do_cache (bool, optional): flag indicates dump everything in mem. Very fast but OOM can happen. Defaults to False.
             subset_shuffle (bool, optional): flag indicates whether subset is shuffled. After splitting WHOLE TRAIN/VAL/TEST sets, we perform subset shuffling per set. Defaults to True.
             dataset_log_pt_path (str, optional): .pt path where storing subset indices and statistic (when you call `gather_statistic`). If `dataset_log_pt_path=""`, we WON'T LOAD SHUFFLE IDs.  Defaults to ''.
-
+            do_repeat_time_dim_for_scene (bool, optional): flag indicates whether repeating (static) parameters if time length is inconsistent when stacking, available iif `batch_axis_choice`==scene. Default is False.
         """  # noqa: E501
         self.input_paths = input_paths
         self.wdn_names = wdn_names
@@ -381,6 +382,7 @@ class GidaV7(Dataset):
         self.dataset_log_pt_path = dataset_log_pt_path
 
         self.cache_dir = "data"
+        self.do_repeat_time_dim_for_scene = do_repeat_time_dim_for_scene
         os.makedirs("data", exist_ok=True)
         # allow user customize function here
         self.custom_process()
@@ -1112,6 +1114,7 @@ class GidaV7(Dataset):
 
         merging_arrs = []
 
+        max_time_dim = -1
         max_dim: int = -1
         for att, has_asterisk in zip(sorted_attrs, has_asterisks):
             if isinstance(att, str):
@@ -1129,6 +1132,7 @@ class GidaV7(Dataset):
             else:
                 raise NotImplementedError
 
+            max_time_dim = max(max_time_dim, my_arr.shape[-1])
             merging_arrs.append(my_arr)
 
         required_padding = any(has_asterisks)
@@ -1177,6 +1181,22 @@ class GidaV7(Dataset):
                     merging_arrs[i] = arr
                     if self.verbose:
                         print(f"vstack-[pad]- key {attr} shape: {feature.shape}(old) -> {arr.shape}(new)")
+
+        # temporal repeat
+        if self.do_repeat_time_dim_for_scene:
+            assert self.batch_axis_choice == "scene", (
+                f"Error! `do_repeat_time_dim_for_scene` is on but not support for batch_axis_choice ({self.batch_axis_choice})! Please turn this flag off!"
+            )
+            assert max_time_dim > 0
+            for i in range(len(merging_arrs)):
+                feature: np.ndarray = merging_arrs[i]
+                cur_time_dim = feature.shape[-1]
+                if cur_time_dim < max_time_dim:
+                    repeat_k = int(np.ceil(max_time_dim / cur_time_dim))
+                    # repeat k times, then slice to match max_time_dim
+                    feature = np.tile(feature, (1, 1, repeat_k))[..., :max_time_dim]
+                    merging_arrs[i] = feature
+
         cat_array = np.concatenate(merging_arrs, axis=-1)
 
         if is_node:

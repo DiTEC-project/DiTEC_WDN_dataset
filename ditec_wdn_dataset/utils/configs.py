@@ -420,6 +420,7 @@ class GidaConfig(AbstractConfig):
     split_per_network: bool = True  # If True, foreach network, we split train, valid, test individually (Useful for multiple network joint-training). Otherwise, we concatenate all networks into a single to-be-splitted array # noqa: E501
     wdn_names: list[str] = []  # support hugging face. This list should be non-empty (v7) or `zip_file_paths` should be non-empty(v6).
     indexing: Literal["static", "dynamic"] = "dynamic"  # Two ways to generate indices, dynamic is faster. Default is dynamic.
+    do_repeat_time_dim_for_scene: bool = False  # flag indicates whether repeating (static) parameters if time length is inconsistent when stacking, available iif `batch_axis_choice`==scene. Default is False.
     """"########################### DEPRECATED SOON "###########################"""
     time_sampling_rate: int = 1  # perform sampling on time dim(V5 only)
     overwatch: bool = False  # Turn on to capture memory snapshots at some defined phases. (V5 only)
