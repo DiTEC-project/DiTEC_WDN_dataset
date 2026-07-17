@@ -17,6 +17,7 @@ from ditec_wdn_dataset.utils.auxil_v8 import (
     masking_list,
     get_all_simulation_output_parameters,
 )
+from ditec_wdn_dataset.utils.adj_builder import build_adj_from_input
 from torch_geometric.data.data import BaseData
 from torch_geometric.data import Dataset, Data, Batch
 
@@ -409,7 +410,9 @@ class GidaV7(Dataset):
 
     def custom_process(self) -> None:
         # load arrays from zip file (and input_paths)
-        self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(wdn_names=self.wdn_names)
+        self.length, self._index_map, self._network_map, self._num_samples_per_network_list = self.compute_indices(
+            wdn_names=self.wdn_names, input_paths=self.input_paths
+        )
 
         self.train_ids, self.val_ids, self.test_ids = self.compute_subset_ids_by_ratio(self.split_ratios, num_samples=self._get_num_samples())
 
@@ -551,13 +554,15 @@ class GidaV7(Dataset):
 
         return train_ids, val_ids, test_ids
 
-    def compute_indices(self, wdn_names: list[str]) -> tuple[int, dict[int, tuple[int | None, int | None]], dict[int, int], list[int]]:
+    def compute_indices(
+        self, wdn_names: list[str], input_paths: list[str] = []
+    ) -> tuple[int, dict[int, tuple[int | None, int | None]], dict[int, int], list[int]]:
         # this is must-have since the size of networks is different.
         index_map: dict[int, tuple[int | None, int | None]] = {}
         network_map: dict[int, int] = {}
         num_samples_per_network_list: list[int] = []
         flatten_index = 0
-        self.load_roots(wdn_names)
+        self.load_roots(wdn_names, input_paths)
         if self.batch_axis_choice in ["scene", "temporal"]:
             time_dims = [r.time_dim for r in self._roots]
             assert sum(time_dims) / len(time_dims) == time_dims[0], (
@@ -699,10 +704,7 @@ class GidaV7(Dataset):
         wdn_folders = list(set(wdn_folders))
         return wdn_folders
 
-    def load_roots(
-        self,
-        wdn_names: list[str],
-    ) -> None:
+    def load_roots(self, wdn_names: list[str], input_paths: list[str] = []) -> None:
         # avail_wdn_names = self._get_all_wdn_folders(repo_id=HUGGING_FACE_REPO)
         for i, wdn_name in enumerate(wdn_names):
             # assert os.path.isfile(zip_file_path) and zip_file_path[-4:] == ".zip", f"{zip_file_path} is not a zip file"
@@ -727,7 +729,12 @@ class GidaV7(Dataset):
             ), "Curve-related parameters are not supported currently"
 
             # convert wdn to edge_index or load adj_list
-            adj_list: list[tuple[str, str, str]] = root.attrs["adj_list"]
+            if len(input_paths) > 0:
+                wn = WaterNetworkModel(input_paths[i])
+                # adj_list: list[tuple[str, str, str]] = get_adj_list(wn, [])
+                adj_list: list[tuple[str, str, str]] = build_adj_from_input(wn)["adj_list"]
+            else:
+                adj_list: list[tuple[str, str, str]] = root.attrs["adj_list"]
 
             okeys = root.attrs["okeys"]
             root_components = list({self.get_component(attr) for attr in root.array_keys})

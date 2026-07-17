@@ -17,13 +17,14 @@ import torch
 import zarr
 from ditec_wdn_dataset.utils.profiler import WatcherManager
 from ditec_wdn_dataset.utils.auxil_v8 import (
-    get_adj_list,
+    # get_adj_list,
     get_object_name_list_by_component,
     is_node_simulation_output,
     get_curve_parameters,
     shuffle_list,
     masking_list,
 )
+from ditec_wdn_dataset.utils.adj_builder import build_adj_from_input
 import tempfile
 from torch_geometric.data.data import BaseData
 from torch_geometric.data import Dataset, Data, Batch
@@ -941,7 +942,8 @@ class GidaV6(Dataset):
             # convert wdn to edge_index or load adj_list
             if len(input_paths) > 0:
                 wn = WaterNetworkModel(input_paths[i])
-                adj_list: list[tuple[str, str, str]] = get_adj_list(wn, [])
+                # adj_list: list[tuple[str, str, str]] = get_adj_list(wn, [])
+                adj_list: list[tuple[str, str, str]] = build_adj_from_input(wn)["adj_list"]
             else:
                 wn = None
                 adj_list: list[tuple[str, str, str]] = root.attrs["adj_list"]
@@ -2530,7 +2532,10 @@ class GidaV5(Dataset):
             # convert to edge_index
             if len(input_paths) > 0:
                 wn = WaterNetworkModel(input_paths[i])
-                adj_list: list[tuple[str, str, str]] = get_adj_list(wn, [])
+                # get_adj_list internally calls wn.to_graph(), this function has unknown defect and impact the resulting adj_list
+                # adj_list: list[tuple[str, str, str]] = get_adj_list(wn, [])
+
+                adj_list: list[tuple[str, str, str]] = build_adj_from_input(wn)["adj_list"]
             else:
                 wn = None
                 adj_list: list[tuple[str, str, str]] = root.attrs["adj_list"]

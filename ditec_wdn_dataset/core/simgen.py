@@ -56,6 +56,7 @@ from ditec_wdn_dataset.utils.auxil_v8 import (
     is_node_simulation_output,
     pretty_print,
 )
+from ditec_wdn_dataset.utils.adj_builder import build_adj_from_input
 from ditec_wdn_dataset.utils.profiler import WatcherManager
 from ditec_wdn_dataset.utils.misc import get_flow_units
 from ditec_wdn_dataset.utils.terrain import generate_elevation
@@ -2483,7 +2484,8 @@ def generate(config: SimConfig, force_using_ray: bool = False, bypass_checking_r
 
             zarr_group.attrs.update(updated_record_dict)
             # skip nodes list is empty ! Interface will handle skipping instead!
-            adj = get_adj_list(wn, skip_node_names=[])
+            # adj = get_adj_list(wn, skip_node_names=[])
+            adj = build_adj_from_input(wn)["adj_list"]
             # adjacency list of edge tuples: [ (node_name_src1, node_name_dst1, edge_name1), (node_name_src2, node_name_dst2, edge_name2) ]
             zarr_group.attrs["adj_list"] = adj
             # ordered list of names per component (component1: [name1,name2] )

@@ -1113,6 +1113,7 @@ def rechunk_zarr(
 def get_adj_list(wn: wntrn.WaterNetworkModel, skip_node_names: list[str] = []) -> list[tuple[str, str, str]]:
     # ref :  https://github.com/DiTEC-project/gnn-pressure-estimation/blob/main/utils/DataLoader.py
     # graph : nx.Graph = nx.Graph(wn.to_graph()).to_undirected()
+    # NOTE: wn.to_graph() have bug!
     graph: nx.Graph = wn.to_graph().to_undirected()
     if len(skip_node_names) > 0:
         graph.remove_nodes_from(skip_node_names)
