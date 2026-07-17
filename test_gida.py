@@ -2,12 +2,15 @@ from typing import Literal
 import numpy as np
 import zarr
 from ditec_wdn_dataset.core.datasets_large import GidaV6
+from ditec_wdn_dataset.utils.auxil_v8 import pretty_print
 from ditec_wdn_dataset.utils.configs import GidaConfig
 from torch import as_tensor, isclose, not_equal, tensor, allclose, equal
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Dataset
 import pytest
 import timeit
+import tempfile
+import json
 
 
 @pytest.mark.parametrize("batch_axis_choice", ["snapshot", "scene", "temporal"])
@@ -63,7 +66,7 @@ def test_interleaving_on_multinets(batch_axis_choice: Literal["snapshot", "scene
 
 
 @pytest.mark.parametrize("batch_axis_choice", ["snapshot", "scene", "temporal"])
-def test_node_single_multiple_equal_nets(batch_axis_choice: Literal["snapshot", "scene", "temporal"]):
+def test_node_single_multiple_equal_nets(batch_axis_choice: Literal["snapshot", "scene", "temporal"], with_inp: bool = False):
     """single nodal attribute"""
     gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
     gida_config = GidaConfig()
@@ -72,6 +75,11 @@ def test_node_single_multiple_equal_nets(batch_axis_choice: Literal["snapshot", 
     gida_config.zip_file_paths = [
         r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",
     ]
+    if with_inp:
+        gida_config.input_paths = [
+            r"ditec_wdn_dataset/inputs/public/Anytown.inp",
+        ]
+
     gida_config.node_attrs = ["demand"]
     gida_config.edge_label_attrs = []
     gida_config.label_attrs = []
@@ -175,6 +183,7 @@ def test_subset_split(batch_axis_choice: Literal["snapshot", "scene", "temporal"
         r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",
         r"G:/My Drive/Dataset/huy_v3/simgen_epanet2_20241004_1246.zip",
     ]
+
     gida_config.node_attrs = ["demand"]
     gida_config.edge_label_attrs = []
     gida_config.label_attrs = []
@@ -214,7 +223,7 @@ def _iterate_over_a_set(batch_size: int, gida_config: GidaConfig, shuffle_at_set
 
 
 @pytest.mark.parametrize("batch_axis_choice", ["snapshot", "scene", "temporal"])
-def test_benchmark_shuffle(batch_axis_choice: Literal["snapshot", "scene", "temporal"]):
+def test_benchmark_shuffle(batch_axis_choice: Literal["snapshot", "scene", "temporal"], with_inp: bool = False):
     gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
     gida_config = GidaConfig()
     gida_config._parsed = True
@@ -223,12 +232,19 @@ def test_benchmark_shuffle(batch_axis_choice: Literal["snapshot", "scene", "temp
         r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",
         # r"G:/My Drive/Dataset/huy_v3/simgen_epanet2_20241004_1246.zip",
     ]
+
+    if with_inp:
+        gida_config.input_paths = [
+            r"G:/Other computers/My Laptop/PhD/Codebase/DiTEC_WDN_dataset/ditec_wdn_dataset/inputs/public/Anytown.inp",
+        ]
+
     gida_config.node_attrs = ["demand"]
     gida_config.edge_label_attrs = []
     gida_config.label_attrs = []
     gida_config.edge_label_attrs = []
     gida_config.num_records = 100
     gida_config.indexing = "dynamic"
+    gida_config.verbose = True
 
     gida_config.batch_axis_choice = batch_axis_choice
     if batch_axis_choice == "scene":
@@ -268,7 +284,7 @@ def test_benchmark_shuffle(batch_axis_choice: Literal["snapshot", "scene", "temp
 
 
 @pytest.mark.parametrize("batch_axis_choice", ["snapshot", "temporal"])
-def test_unequal_timelength(batch_axis_choice: Literal["snapshot", "scene", "temporal"]):
+def test_unequal_timelength(batch_axis_choice: Literal["snapshot", "scene", "temporal"], with_inp: bool = False):
     gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
     gida_config = GidaConfig()
     gida_config._parsed = True
@@ -277,6 +293,13 @@ def test_unequal_timelength(batch_axis_choice: Literal["snapshot", "scene", "tem
         r"G:\My Drive\Dataset\from_habrok\simgen_EXN_20241119_0325.zip",  # <--------------------------24h
         r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",  # <-------------------------- 8760h
     ]
+
+    if with_inp:
+        gida_config.input_paths = [
+            r"G:/Other computers/My Laptop/PhD/Codebase/DiTEC_WDN_dataset/ditec_wdn_dataset/inputs/public/EXN.inp",
+            r"G:/Other computers/My Laptop/PhD/Codebase/DiTEC_WDN_dataset/ditec_wdn_dataset/inputs/public/Anytown.inp",
+        ]
+
     gida_config.node_attrs = ["demand"]
     gida_config.edge_label_attrs = []
     gida_config.label_attrs = ["demand"]
@@ -309,7 +332,7 @@ def test_unequal_timelength(batch_axis_choice: Literal["snapshot", "scene", "tem
 
 
 @pytest.mark.parametrize("batch_axis_choice", ["snapshot", "temporal"])
-def test_static_and_dynamic_indexing(batch_axis_choice: Literal["snapshot", "scene", "temporal"]):
+def test_static_and_dynamic_indexing(batch_axis_choice: Literal["snapshot", "scene", "temporal"], with_inp: bool = False):
     gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
     gida_config = GidaConfig()
     gida_config._parsed = True
@@ -318,13 +341,15 @@ def test_static_and_dynamic_indexing(batch_axis_choice: Literal["snapshot", "sce
         # r"G:/My Drive/Dataset/huy_v3/simgen_epanet2_20241004_1246.zip",
         r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",  # <-------------------------- 8760h
     ]
+    if with_inp:
+        gida_config.input_paths = [r"G:/Other computers/My Laptop/PhD/Codebase/DiTEC_WDN_dataset/ditec_wdn_dataset/inputs/public/Anytown.inp"]
     gida_config.node_attrs = ["demand"]
     gida_config.edge_label_attrs = []
     gida_config.label_attrs = []
     gida_config.edge_label_attrs = []
     gida_config.batch_axis_choice = batch_axis_choice
     gida_config.subset_shuffle = False
-    gida_config.num_records = 8760000 * 20
+    gida_config.num_records = None  # 8760000 * 20
 
     # gida_config.indexing = "static"
     # static_gida: GidaV6 = GidaV6(**gida_config.as_dict())
@@ -360,17 +385,106 @@ def test_static_and_dynamic_indexing(batch_axis_choice: Literal["snapshot", "sce
     plt.show()
 
 
+def test_save_and_load_stats_with_json():
+    gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
+    gida_config = GidaConfig()
+    gida_config._parsed = True
+    gida_config._from_yaml(gida_yaml_path, unsafe_load=True)
+    gida_config.zip_file_paths = [
+        # r"G:/My Drive/Dataset/huy_v3/simgen_epanet2_20241004_1246.zip",
+        r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",  # <-------------------------- 8760h
+    ]
+    gida_config.node_attrs = ["demand"]
+    gida_config.edge_label_attrs = []
+    gida_config.label_attrs = []
+    gida_config.edge_label_attrs = []
+    gida_config.batch_axis_choice = "snapshot"
+    gida_config.subset_shuffle = False
+    gida_config.num_records = 100  # 8760000 * 20
+
+    full_gida: GidaV6 = GidaV6(**gida_config.as_dict())
+    full_gida.dataset_log_pt_path = "test_stats.json"
+    stat_tup = full_gida.gather_statistic(which_array="node")
+    stat_dict = dict(zip(["min", "max", "mean", "std"], stat_tup))
+    save_path = full_gida.save_dataset_checkpoint(**stat_dict)
+
+    with open(save_path, "r") as f:
+        loaded_stat_dict = json.load(f)
+
+    print("*" * 40 + "stat dict" + "*" * 40)
+    pretty_print(stat_dict)
+    print("*" * 40 + "loaded_stat_dict" + "*" * 40)
+    pretty_print(loaded_stat_dict)
+
+
+def test_edge_padding(with_inp: bool = False):
+    gida_yaml_path: str = r"ditec_wdn_dataset/arguments/test_data_interface_v6_config.yaml"
+    gida_config = GidaConfig()
+    gida_config._parsed = True
+    gida_config._from_yaml(gida_yaml_path, unsafe_load=True)
+    gida_config.zip_file_paths = [
+        # r"G:/My Drive/Dataset/huy_v3/simgen_epanet2_20241004_1246.zip",
+        # r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",  # <-------------------------- 8760h
+        # r"G:/My Drive/Dataset/huy_v3/simgen_Anytown_20241118_1026.zip",  # <-------------------------- 8760h
+        r"G:\My Drive\Dataset\huy_v3\simgen_CTOWN_20241104_1719-13694886.zip",
+    ]
+    if with_inp:
+        gida_config.input_paths = [r"G:\Other computers\My Laptop\PhD\Codebase\DiTEC_WDN_dataset\ditec_wdn_dataset\inputs\public\CTOWN.INP"]
+    gida_config.node_attrs = ["demand"]
+    gida_config.edge_attrs = [
+        "*pipe_diameter",
+        "flowrate",
+    ]
+    gida_config.label_attrs = []
+    gida_config.edge_label_attrs = []
+    gida_config.batch_axis_choice = "snapshot"
+    gida_config.subset_shuffle = False
+    gida_config.num_records = 100  # 8760000 * 20
+
+    full_gida: GidaV6 = GidaV6(**gida_config.as_dict())
+    train_gida = full_gida.get_set(full_gida.train_ids, num_records=10)
+    loader = DataLoader(train_gida)
+    from torch_geometric.data import Data
+    import numpy as np
+    import pandas as pd
+
+    print(f"full_gida._roots[0].sorted_edge_attrs = {full_gida._roots[0].sorted_edge_attrs}")
+    print(f"full_gida._roots[0].edge_components = {full_gida._roots[0].edge_components}")
+    print(f"full_gida._roots[0].edge_names = {full_gida._roots[0].edge_names}")
+    edge_names_np = np.asarray(full_gida._roots[0].edge_names, dtype=str)
+    print(f"edge_names_np shape = {edge_names_np.shape}")
+    for batch in loader:
+        data: Data = batch
+        print(f"data.edge_attr.shape: {data.edge_attr.shape}")
+        print(f"data.edge_attr: {data.edge_attr}")
+
+        edge_attr_np = data.edge_attr.numpy()
+        edge_attr_df = pd.DataFrame(edge_attr_np)
+        df = pd.concat([pd.Series(edge_names_np), edge_attr_df], axis=1)
+        print(df.head(20))
+        print("###########")
+        print(df.tail(20))
+        break
+
+
+from ditec_wdn_dataset.utils.checker import check_all_zarr_and_inp
+
 if __name__ == "__main__":
-    test_static_and_dynamic_indexing("scene")
-    # test_unequal_timelength("temporal")
-    # test_unequal_timelength("snapshot")
-    # test_benchmark_shuffle(batch_axis_choice="scene")
-    # test_benchmark_shuffle(batch_axis_choice="snapshot")
-    # test_benchmark_shuffle(batch_axis_choice="temporal")
+    pass
+    # check_all_zarr_and_inp(debug=0)
+    with_inp = True
+    test_edge_padding(with_inp=with_inp)
+    test_static_and_dynamic_indexing("scene", with_inp=with_inp)
+    test_unequal_timelength("temporal", with_inp=with_inp)
+    test_unequal_timelength("snapshot", with_inp=with_inp)
+    test_benchmark_shuffle(batch_axis_choice="scene", with_inp=with_inp)
+    # test_save_and_load_stats_with_json()
+    test_benchmark_shuffle(batch_axis_choice="snapshot", with_inp=with_inp)
+    test_benchmark_shuffle(batch_axis_choice="temporal", with_inp=with_inp)
     # test_subset_split(batch_axis_choice="scene")
     # test_subset_split(batch_axis_choice="snapshot")
     # test_subset_split(batch_axis_choice="temporal")
-#     test_interleaving_on_multinets(batch_axis_choice="scene")
-#     test_node_single_multiple_equal_nets(batch_axis_choice="temporal")
-#     test_check_x_equal_y_multiple_equal_nets()
-#     test_shuffle_multiple_nets("scene")
+    # test_interleaving_on_multinets(batch_axis_choice="scene")
+    test_node_single_multiple_equal_nets(batch_axis_choice="temporal", with_inp=with_inp)
+    # test_check_x_equal_y_multiple_equal_nets()
+    # test_shuffle_multiple_nets("scene")
