@@ -169,7 +169,6 @@ data/
 *.pyc
 gigantic-dataset
 *.sync
-*.zip
 dataset/*
 gigantic_dataset/outputs
 gigantic_dataset/inputs
