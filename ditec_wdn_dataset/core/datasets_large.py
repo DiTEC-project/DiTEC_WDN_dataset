@@ -987,22 +987,22 @@ class GidaV6(Dataset):
             edge_skip_types = list(set(skip_types).union(label_edge_skip_types))
 
             # update node mask
-            if wn is not None:
-                node_name_list = wn.node_name_list
-            else:
-                node_name_list = [ ]
-                for node_com in ['junction','tank','reservoir']: #<-fixed order
-                    node_name_list.extend(self.get_object_names_by_component(root=root, component=node_com))
-           
+            node_masks = []
+            node_names = []
             for node_com in node_components:
-                if node_com in node_skip_types:
-                    object_names = self.get_object_names_by_component(root=root, component=node_com)
+                object_names = self.get_object_names_by_component(root=root, component=node_com)
+                if node_com not in node_skip_types:
+                    mask_list = [name not in skip_nodes for name in object_names]
+                    mask = np.asarray(mask_list, dtype=bool)
+                    node_names.extend(list(compress(object_names, mask_list)))
+                else:
+                    mask = np.zeros(len(object_names), dtype=bool)
                     skip_nodes.extend(object_names)
-            mask_list = [name not in skip_nodes for name in node_name_list]
-            node_mask = np.asarray(mask_list, dtype=bool)
-            node_names = list(set(skip_nodes))
+                node_masks.append(mask)
+            node_mask = np.concatenate(node_masks)
+
             if self.verbose:
-                print(f"Skip node names = {node_names}")
+                print(f"Skip nodes = {skip_nodes}")
 
             # update edge mask
             adj_masks = []
